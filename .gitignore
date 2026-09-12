@@ -1,0 +1,10 @@
+# Sensible Konfigurationsdateien mit echten Zugangsdaten
+WlanNetwork/config.py
+Notification/config.py
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store

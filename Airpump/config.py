@@ -1,0 +1,2 @@
+AIR_PUMP_ON = 19 - 2
+AIR_PUMP_OFF = 20 - 2

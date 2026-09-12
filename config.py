@@ -1,0 +1,1 @@
+AQUARIUM_NAME = "Vorzimmer"
