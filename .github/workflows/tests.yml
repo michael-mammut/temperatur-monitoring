@@ -12,5 +12,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Provide dummy config (real config.py is gitignored, holds secrets)
+        run: |
+          cp WlanNetwork/config.example.py WlanNetwork/config.py
+          cp Notification/config.example.py Notification/config.py
       - name: Run unit tests
         run: python3 -m unittest discover -s tests -v
