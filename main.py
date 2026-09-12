@@ -1,8 +1,9 @@
 import gc
 import time
-import json
-from Temperature import config as temperature_config
 
+from machine import WDT
+
+from Temperature import config as temperature_config
 from GpioControl.ActorControl import ActorControl
 from GpioControl import config as actor_config
 from GpioControl.LedControl import led_error_twinkle, led_twinkle
@@ -13,63 +14,74 @@ from WlanNetwork import config as wlan_config
 from Airpump import config as air_pump_config
 import config as project_config
 
-print("+++++ START ++++++")
-pin_K4_5_volt_free = ActorControl(actor_config.ACTOR_GPIO_FREE)
-pin_K3_5_volt_air_pump = ActorControl(actor_config.ACTOR_GPIO_AIR_PUMP)
-pin_K2_12_volt_fan = ActorControl(actor_config.ACTOR_GPIO_FAN)
-pin_K1_12_volt_wlan = ActorControl(actor_config.ACTOR_GPIO_WLAN)
+WATCHDOG_TIMEOUT_MS = 15000
 
-air_pump_state = False
-air_cooler_state = False
 
-first_run = True
-message_send_counter = 0
+class AquariumMonitor:
+    def __init__(self):
+        self.pin_K4_5_volt_free = ActorControl(actor_config.ACTOR_GPIO_FREE)
+        self.pin_K3_5_volt_air_pump = ActorControl(actor_config.ACTOR_GPIO_AIR_PUMP)
+        self.pin_K2_12_volt_fan = ActorControl(actor_config.ACTOR_GPIO_FAN)
+        self.pin_K1_12_volt_wlan = ActorControl(actor_config.ACTOR_GPIO_WLAN)
 
-wlan = WlanConnection(wlan_config.SSID, wlan_config.PASSWORD, wlan_config.DHCP_HOSTNAME)
-print("----- LOOP START ------")
-while True:
-    if wlan.isConnected() == False:
-        print("Main-Script is online")
-        pin_K1_12_volt_wlan.on()
-        if wlan.connect() == True:
-            print("Main-Script is now online")
-            pin_K1_12_volt_wlan.off()
+        self.wlan = WlanConnection(wlan_config.SSID, wlan_config.PASSWORD, wlan_config.DHCP_HOSTNAME)
+        self.telegram = Telegram(project_config.AQUARIUM_NAME)
+        self.ambient_sensor = Temperature(temperature_config.ONE_WIRE_GPIO_AMBIENT)
+        self.water_sensor = Temperature(temperature_config.ONE_WIRE_GPIO_WATER)
 
-    hour = time.gmtime()[3]
+        self.air_pump_state = False
+        self.first_run = True
+        self.message_send_counter = 0
 
-    # measure temperature
-    ambient = Temperature(temperature_config.ONE_WIRE_GPIO_AMBIENT)
-    ambient_temperature = ambient.readCurrentAverage()
+    def run_iteration(self):
+        if self.wlan.isConnected() == False:
+            print("Main-Script is online")
+            self.pin_K1_12_volt_wlan.on()
+            if self.wlan.connect() == True:
+                print("Main-Script is now online")
+                self.pin_K1_12_volt_wlan.off()
 
-    water = Temperature(temperature_config.ONE_WIRE_GPIO_WATER)
-    water_temperature = water.readCurrentAverage()
+        hour = time.gmtime()[3]
 
-    # air pump
-    if hour == air_pump_config.AIR_PUMP_ON and air_pump_state == False:
-        pin_K3_5_volt_air_pump.off()
-        air_pump_state = True
+        ambient_temperature = self.ambient_sensor.readCurrentAverage()
+        water_temperature = self.water_sensor.readCurrentAverage()
 
-    if hour == air_pump_config.AIR_PUMP_OFF and air_pump_state == True:
-        pin_K3_5_volt_air_pump.on()
-        air_pump_state = False
+        if hour == air_pump_config.AIR_PUMP_ON and self.air_pump_state == False:
+            self.pin_K3_5_volt_air_pump.off()
+            self.air_pump_state = True
 
-    # set relais by temperature value
-    if water_temperature > temperature_config.TEMPERATURE_MAX:
-        pin_K2_12_volt_fan.off()
-        air_cooler_state = True
+        if hour == air_pump_config.AIR_PUMP_OFF and self.air_pump_state == True:
+            self.pin_K3_5_volt_air_pump.on()
+            self.air_pump_state = False
 
-    elif water_temperature < temperature_config.TEMPERATURE_MIN:
-        pin_K2_12_volt_fan.on()
-        air_cooler_state = False
-    else:
-        pass
+        if water_temperature > temperature_config.TEMPERATURE_MAX:
+            self.pin_K2_12_volt_fan.off()
+        elif water_temperature < temperature_config.TEMPERATURE_MIN:
+            self.pin_K2_12_volt_fan.on()
 
-    # time of sending temperature notification
-    if wlan.isConnected() == True:
-        telegram = Telegram(project_config.AQUARIUM_NAME)
-        message_send_counter = telegram.send_aquarium_notification(ambient_temperature, water_temperature, first_run, message_send_counter)
-        first_run = False
+        if self.wlan.isConnected() == True:
+            self.message_send_counter = self.telegram.send_aquarium_notification(
+                ambient_temperature, water_temperature, self.first_run, self.message_send_counter)
+            self.first_run = False
 
-    led_twinkle(22, 75)
-    time.sleep_ms(3000)
-    gc.collect()
+        led_twinkle(22, 75)
+
+
+def main():
+    print("+++++ START ++++++")
+    monitor = AquariumMonitor()
+    wdt = WDT(timeout=WATCHDOG_TIMEOUT_MS)
+    print("----- LOOP START ------")
+    while True:
+        try:
+            monitor.run_iteration()
+        except Exception as exc:
+            print("Loop iteration failed:", exc)
+            led_error_twinkle(22, 23, 150, 3)
+        wdt.feed()
+        time.sleep_ms(3000)
+        gc.collect()
+
+
+if __name__ == "__main__":
+    main()

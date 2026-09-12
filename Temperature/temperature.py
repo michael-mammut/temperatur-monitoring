@@ -6,17 +6,17 @@ class Temperature:
         self.__gpio = gpio
 
     def readCurrentAverage(self):
-        temperature_list = array.array('f', "")
+        temperature_list = array.array('f', [])
         dat = Pin(self.__gpio, Pin.IN)
         try:
             ds = ds18x20.DS18X20(onewire.OneWire(dat))
             roms = ds.scan()
             ds.convert_temp()
+            time.sleep_ms(750)
+            for rom in roms:
+                temperature_list.append(ds.read_temp(rom))
         except Exception as ow_exc:
             print(ow_exc)
-        time.sleep_ms(750)
-        for rom in roms:
-            temperature_list.append(ds.read_temp(rom))
 
         return self._averageTemperature(temperature_list)
 

@@ -16,11 +16,15 @@ class Telegram:
             message = "-- no message --"
 
         url = 'https://api.telegram.org/bot' + notification_config.BOT_TOKEN + '/sendMessage?chat_id=-' + notification_config.CHAT_ID + '&text=' + message
+        res = None
         try:
             res = urequests.get(url=url)
             print(str(res.json()))
         except Exception as ow_exc:
             led_error_twinkle(22, 23, 100, 5)
+        finally:
+            if res is not None:
+                res.close()
 
     def send_aquarium_notification(self, ambient_temperature, water_temperature, first_run, message_send_counter):
         message = self._project_name + " - Wassertemperatur: " + str(
