@@ -47,8 +47,9 @@ class NotifyClosesResponseTests(unittest.TestCase):
 class NotificationTimingTests(unittest.TestCase):
     def test_first_run_always_notifies(self):
         telegram = Telegram("Vorzimmer", morning_hour_message=6, afternoon_hour_message=14)
-        with patch.object(telegram, "notify") as notify_mock:
-            counter = telegram.send_aquarium_notification(20.0, 21.0, first_run=True, message_send_counter=0)
+        with patch("Notification.telegram.time.gmtime", return_value=(2024, 1, 1, 3, 0, 0, 0, 0)):
+            with patch.object(telegram, "notify") as notify_mock:
+                counter = telegram.send_aquarium_notification(20.0, 21.0, first_run=True, message_send_counter=0)
         notify_mock.assert_called_once()
         self.assertEqual(counter, 0)
 
