@@ -21,6 +21,91 @@ _CHART_CATEGORIES = ALL_CATEGORIES
 # fragmentation on the ESP32 (see _render_error_table).
 _MAX_DISPLAYED_ERRORS = 20
 
+# Shared across every page. Uses prefers-color-scheme so it looks right
+# in both light and dark mode without any JavaScript or external
+# stylesheet - the ESP32 has no internet access to fetch one anyway.
+_STYLE = """<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f4f5f6;
+  --fg: #1c1f22;
+  --muted: #5b6470;
+  --card: #ffffff;
+  --border: #dde1e4;
+  --accent: #2f7d6e;
+  --accent-fg: #ffffff;
+  --stripe: #eef1f2;
+  --error: #b3392c;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15181b;
+    --fg: #e7e9ea;
+    --muted: #9aa4ac;
+    --card: #1f2327;
+    --border: #333a40;
+    --accent: #52b3a0;
+    --accent-fg: #0d1513;
+    --stripe: #272c31;
+    --error: #e0806f;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 1.5rem 1rem;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+}
+.card {
+  max-width: 640px;
+  margin: 0 auto;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem 1.5rem;
+}
+h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+h2 { font-size: 1.05rem; margin: 1.5rem 0 .5rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+h2:first-of-type { margin-top: .75rem; padding-top: 0; border-top: none; }
+a { color: var(--accent); }
+nav, .nav { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border); font-size: .9rem; color: var(--muted); }
+label { display: block; margin: .75rem 0 .25rem; font-size: .85rem; color: var(--muted); }
+label.check { display: flex; align-items: center; gap: .5rem; margin: .5rem 0; font-size: .95rem; color: var(--fg); }
+label.check input { width: auto; }
+input[type=text], input[type=password], input[type=number], select {
+  width: 100%;
+  padding: .5rem .6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 1rem;
+}
+input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+button {
+  margin-top: 1rem;
+  padding: .55rem 1.3rem;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 1rem;
+  cursor: pointer;
+}
+button:active { opacity: .85; }
+table { width: 100%; border-collapse: collapse; margin-top: .5rem; font-size: .85rem; }
+th, td { padding: .4rem .5rem; text-align: left; border-bottom: 1px solid var(--border); }
+tr:nth-child(even) td { background: var(--stripe); }
+.msg { padding: .6rem .9rem; border-radius: 8px; background: var(--stripe); margin: .75rem 0; }
+.msg.err { color: var(--error); }
+svg rect { fill: var(--accent); }
+svg text { fill: var(--fg); }
+</style>"""
+
 
 class StatusServer:
     def __init__(self, port, settings, wifi_settings, admin_password, reset_callback,
@@ -145,18 +230,22 @@ class StatusServer:
 <head>
 <meta charset="utf-8">
 <meta http-equiv="refresh" content="30">
+{style}
 <title>{name}</title>
 </head>
 <body>
+<div class="card">
 <h1>{name}</h1>
 <p>Status: online</p>
 <p>Wassertemperatur: {water} &deg;C</p>
 <p>Umgebungstemperatur: {ambient} &deg;C</p>
 <p>Letzte Messung: {updated}</p>
-<p><a href="/settings">Einstellungen</a> | <a href="/wifi-settings">WLAN</a> | <a href="/statistics">Statistik</a></p>
+<p class="nav"><a href="/settings">Einstellungen</a> | <a href="/wifi-settings">WLAN</a> | <a href="/statistics">Statistik</a></p>
+</div>
 </body>
 </html>
 """.format(
+            style=_STYLE,
             name=name,
             water=water,
             ambient=ambient,
@@ -166,9 +255,9 @@ class StatusServer:
     def render_settings(self, saved=False, error=None):
         name = self._escape_html(self._settings.get_name())
         if error:
-            message = '<p>Fehler: {}</p>'.format(self._escape_html(error))
+            message = '<p class="msg err">Fehler: {}</p>'.format(self._escape_html(error))
         elif saved:
-            message = '<p>Gespeichert.</p>'
+            message = '<p class="msg">Gespeichert.</p>'
         else:
             message = ''
 
@@ -196,7 +285,7 @@ class StatusServer:
             for category in ALL_CATEGORIES:
                 checked = ' checked' if self._logging_settings.is_enabled(category) else ''
                 checkboxes.append(
-                    '<label><input type="checkbox" name="log_{cat}" value="1"{checked}> {label}</label><br>'.format(
+                    '<label class="check"><input type="checkbox" name="log_{cat}" value="1"{checked}> {label}</label>'.format(
                         cat=category, checked=checked, label=self._escape_html(CATEGORY_LABELS[category])))
             logging_fields = '<p>Fehlerprotokollierung:</p>\n' + '\n'.join(checkboxes)
 
@@ -204,39 +293,44 @@ class StatusServer:
 <html>
 <head>
 <meta charset="utf-8">
+{style}
 <title>Einstellungen</title>
 </head>
 <body>
+<div class="card">
 <h1>Einstellungen</h1>
 {message}
 <form method="POST" action="/settings">
-<label>Aquarium-Name: <input type="text" name="name" value="{name}" maxlength="64"></label><br>
+<label>Aquarium-Name: <input type="text" name="name" value="{name}" maxlength="64"></label>
 {monitoring_fields}
 {logging_fields}
 <button type="submit">Speichern</button>
 </form>
-<p><a href="/">Status</a> | <a href="/wifi-settings">WLAN</a> | <a href="/statistics">Statistik</a></p>
+<p class="nav"><a href="/">Status</a> | <a href="/wifi-settings">WLAN</a> | <a href="/statistics">Statistik</a></p>
+</div>
 </body>
 </html>
-""".format(message=message, name=name, monitoring_fields=monitoring_fields, logging_fields=logging_fields)
+""".format(style=_STYLE, message=message, name=name, monitoring_fields=monitoring_fields, logging_fields=logging_fields)
 
     def render_wifi_settings(self, monitor, saved=False, error=None, ssid=None):
         current_ssid = self._escape_html(self._wifi_settings.get_ssid())
         options = self._render_network_options(monitor, selected=ssid)
         if saved:
-            message = ('<p>Gespeichert. Das Gerät verbindet sich jetzt neu - '
+            message = ('<p class="msg">Gespeichert. Das Gerät verbindet sich jetzt neu - '
                         'sollte das fehlschlagen, muss es per USB neu konfiguriert werden.</p>')
         elif error:
-            message = '<p>Fehler: {}</p>'.format(self._escape_html(error))
+            message = '<p class="msg err">Fehler: {}</p>'.format(self._escape_html(error))
         else:
             message = ''
         return """<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
+{style}
 <title>WLAN-Einstellungen</title>
 </head>
 <body>
+<div class="card">
 <h1>WLAN-Einstellungen</h1>
 <p>Aktuell konfiguriert: {current_ssid}</p>
 {message}
@@ -245,14 +339,15 @@ class StatusServer:
 <select name="ssid">
 {options}
 </select>
-</label><br>
+</label>
 <label>Passwort: <input type="password" name="password" maxlength="63" autocomplete="new-password"></label>
 <button type="submit">Verbinden</button>
 </form>
-<p><a href="/">Status</a> | <a href="/settings">Einstellungen</a> | <a href="/statistics">Statistik</a></p>
+<p class="nav"><a href="/">Status</a> | <a href="/settings">Einstellungen</a> | <a href="/statistics">Statistik</a></p>
+</div>
 </body>
 </html>
-""".format(current_ssid=current_ssid, options=options, message=message)
+""".format(style=_STYLE, current_ssid=current_ssid, options=options, message=message)
 
     def _handle_statistics_post(self, monitor, body, previous_login):
         minutes_raw = self._parse_form_field(body, 'minutes')
@@ -286,7 +381,7 @@ class StatusServer:
         chart = self._render_error_chart(counts_by_category)
         error_rows = self._render_error_table()
         log_storage = self._format_log_storage(storage)
-        message_html = '<p>{}</p>'.format(self._escape_html(message)) if message else ''
+        message_html = '<p class="msg">{}</p>'.format(self._escape_html(message)) if message else ''
 
         return """<!DOCTYPE html>
 <html>
@@ -294,8 +389,10 @@ class StatusServer:
 <meta charset="utf-8">
 <meta http-equiv="refresh" content="30">
 <title>Statistik</title>
+{style}
 </head>
 <body>
+<div class="card">
 <h1>Statistik</h1>
 
 <h2>Speicher (RAM)</h2>
@@ -326,10 +423,12 @@ class StatusServer:
 <button type="submit">Löschen</button>
 </form>
 
-<p><a href="/">Status</a> | <a href="/settings">Einstellungen</a> | <a href="/wifi-settings">WLAN</a></p>
+<p class="nav"><a href="/">Status</a> | <a href="/settings">Einstellungen</a> | <a href="/wifi-settings">WLAN</a></p>
+</div>
 </body>
 </html>
 """.format(
+            style=_STYLE,
             mem_used=format_bytes(memory['used']),
             mem_free=format_bytes(memory['free']),
             mem_total=format_bytes(memory['total']),

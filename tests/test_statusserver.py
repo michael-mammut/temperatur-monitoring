@@ -147,7 +147,19 @@ def _request(server, raw_request_bytes, retries=10):
         for _ in range(retries):
             server.handle_requests(server._test_monitor)
             time.sleep(0.05)
-        return client.recv(4096).decode("utf-8")
+        chunks = []
+        while True:
+            try:
+                chunk = client.recv(4096)
+            except ConnectionResetError:
+                # The server may close the socket before the client has
+                # drained an oversized/unread request body; the OS then
+                # answers further reads with RST instead of a clean EOF.
+                break
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks).decode("utf-8")
     finally:
         client.close()
 
