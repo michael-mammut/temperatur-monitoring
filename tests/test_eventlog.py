@@ -144,31 +144,55 @@ class EnforceStorageBudgetTests(unittest.TestCase):
         log.record({'code': 'X'})
         size_before = log.file_size()
 
-        enforce_storage_budget([log], max_percent=50, total_storage_bytes=10 ** 9)
+        enforce_storage_budget([log], max_percent=50, free_bytes=10 ** 9)
 
         self.assertEqual(log.file_size(), size_before)
 
     def test_trims_oldest_entries_when_over_budget(self):
-        """Regression target: 'logs should take up at most N% of total
-        flash' - a log that grew past its budget must shrink, oldest
-        entries first, until it fits again."""
+        """Regression target: 'logs should take up at most N% of the
+        available headroom' - a log that grew past its budget must
+        shrink, oldest entries first, until it fits again."""
         log = EventLog('events.json')
         for i in range(50):
             log.record({'code': str(i), 'message': 'padding' * 5})
 
-        # Budget set (from the actually measured size) to roughly half the
-        # current size, forcing meaningful but not complete trimming.
+        # Solve for the percent (from the actually measured size) that
+        # makes the budget exactly half the current size, forcing
+        # meaningful but not complete trimming - independent of exact
+        # JSON serialization overhead.
         size_before = log.file_size()
-        total_storage_bytes = size_before * 10
-        max_percent = 5  # budget = total_storage_bytes * 0.05 = size_before / 2
+        desired_overshoot = size_before / 2
+        free_bytes = size_before  # arbitrary baseline; max_percent is solved below
+        headroom = free_bytes + size_before
+        max_percent = (size_before - desired_overshoot) / headroom * 100
 
-        enforce_storage_budget([log], max_percent=max_percent, total_storage_bytes=total_storage_bytes)
+        enforce_storage_budget([log], max_percent=max_percent, free_bytes=free_bytes)
 
         remaining = log.entries_within(10 ** 12)
         self.assertGreater(len(remaining), 0)
         self.assertLess(len(remaining), 50)
         # newest entries must survive, oldest got dropped
         self.assertEqual(remaining[-1]['code'], '49')
+
+    def test_shrinking_free_space_shrinks_the_allowed_log_footprint(self):
+        """This is the whole point of basing the budget on headroom
+        instead of total capacity: if free space drops (e.g. other, non-
+        log data grew), the log budget must shrink too, instead of still
+        allowing a fixed share of total capacity that may no longer
+        actually be free."""
+        log = EventLog('events.json')
+        for i in range(50):
+            log.record({'code': str(i), 'message': 'padding' * 5})
+        size_before = log.file_size()
+
+        # Plenty of free space -> well under budget, nothing trimmed.
+        enforce_storage_budget([log], max_percent=10, free_bytes=size_before * 100)
+        self.assertEqual(log.file_size(), size_before)
+
+        # Free space has collapsed (as if something else filled the
+        # flash) -> the same log, same percentage, now gets trimmed.
+        enforce_storage_budget([log], max_percent=10, free_bytes=0)
+        self.assertLess(log.file_size(), size_before)
 
     def test_largest_log_is_trimmed_first_across_several_logs(self):
         small_log = EventLog('small.json')
@@ -183,11 +207,12 @@ class EnforceStorageBudgetTests(unittest.TestCase):
         # computed from the actually measured sizes rather than a guessed
         # byte count, so this doesn't depend on exact JSON overhead.
         combined = small_log.file_size() + big_log.file_size()
-        total_storage_bytes = combined * 100
+        free_bytes = combined * 100
         desired_overshoot = 50
-        max_percent = (combined - desired_overshoot) / total_storage_bytes * 100
+        headroom = free_bytes + combined
+        max_percent = (combined - desired_overshoot) / headroom * 100
 
-        enforce_storage_budget([small_log, big_log], max_percent=max_percent, total_storage_bytes=total_storage_bytes)
+        enforce_storage_budget([small_log, big_log], max_percent=max_percent, free_bytes=free_bytes)
 
         # the small log should be left alone since trimming the big one a
         # little is enough to get under budget

@@ -5,7 +5,7 @@ import sys
 import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -752,6 +752,9 @@ class StatisticsPageTests(unittest.TestCase):
         self.assertIn("Keine Fehler", response)
 
     def test_statistics_page_shows_log_storage_usage_against_budget(self):
+        """The displayed budget must match main.py's actual enforcement
+        formula: a share of headroom (free space + what the logs already
+        use), not of total flash capacity - see WebServer/eventlog.py."""
         error_log = MagicMock()
         error_log.file_size.return_value = 1024
         error_log.entries_within.return_value = []
@@ -763,16 +766,20 @@ class StatisticsPageTests(unittest.TestCase):
                               monitoring_settings=monitoring_settings)
         server._test_monitor = _fake_monitor()
         try:
-            request = (
-                "GET /statistics HTTP/1.1\r\nHost: localhost\r\n"
-                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
-            ).encode()
-            response = _request(server, request)
+            with patch("WebServer.statusserver.get_storage_stats",
+                       return_value={'used': 9000, 'free': 1000, 'total': 10000}):
+                request = (
+                    "GET /statistics HTTP/1.1\r\nHost: localhost\r\n"
+                    "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
+                ).encode()
+                response = _request(server, request)
         finally:
             server._socket.close()
 
+        # headroom = free(1000) + used-by-logs(1024) = 2024; budget = 15% of that = 303.6 B
         self.assertIn("1.0 KB", response)
-        self.assertIn("15% Deckel", response)
+        self.assertIn("303.6 B", response)
+        self.assertIn("15% des verfügbaren Speichers", response)
 
     def test_get_statistics_shows_delete_logs_form(self):
         server = _new_server()

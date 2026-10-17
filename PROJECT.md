@@ -57,9 +57,12 @@ Dateien bisher als ein einziger Base64-Block statt in kleinen Chunks
 Flash unter einen konfigurierbaren Prozentsatz fällt
 (`Monitoring/config.py`, zusätzlich über `/settings` änderbar). Dazu:
 Fehlerprotokollierung je Kategorie über `/settings` abschaltbar
-(`WebServer/loggingsettings.py`), ein Flash-Anteil-Deckel für Fehler- +
-Benachrichtigungs-Log zusammen (`enforce_storage_budget()`, Default 15 %,
-ebenfalls über `/settings` änderbar) sowie ein Formular auf
+(`WebServer/loggingsettings.py`), ein Deckel für Fehler- +
+Benachrichtigungs-Log zusammen (`enforce_storage_budget()`, Default
+15 % des *verfügbaren* Speichers — bewusst nicht der Gesamtkapazität,
+damit der Deckel mitschrumpft, falls der freie Speicher aus anderen
+Gründen knapper wird — ebenfalls über `/settings` änderbar) sowie ein
+Formular auf
 `/statistics`, um Log-Einträge älter als X Minuten manuell zu löschen.
 
 ## Wie KI in diesem Projekt eingesetzt wird

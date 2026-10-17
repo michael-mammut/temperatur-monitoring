@@ -325,9 +325,9 @@ class ResourceUsageWarningTests(_IsolatedCwdTestCase):
 
 class LogStorageBudgetTests(_IsolatedCwdTestCase):
     """Regression target: logs must be kept under their configured share
-    of total flash, enforced every iteration regardless of WLAN state
-    (it's pure filesystem housekeeping, not something that needs to send
-    anything)."""
+    of available headroom (not total flash - see WebServer/eventlog.py),
+    enforced every iteration regardless of WLAN state (it's pure
+    filesystem housekeeping, not something that needs to send anything)."""
 
     def test_enforced_every_iteration_even_when_wlan_disconnected(self):
         patches = _patch_hardware()
@@ -344,7 +344,7 @@ class LogStorageBudgetTests(_IsolatedCwdTestCase):
         enforce_mock.assert_called_once_with(
             [monitor.error_log, monitor.notification_log],
             monitor.monitoring_settings.get_log_storage_percent(),
-            100,
+            80,  # free, not total - the budget must be based on headroom
         )
 
     def test_uses_the_configured_percent_not_a_hardcoded_value(self):

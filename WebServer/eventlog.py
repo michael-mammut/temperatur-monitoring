@@ -75,13 +75,24 @@ class EventLog:
         return size_before - self.file_size()
 
 
-def enforce_storage_budget(logs, max_percent, total_storage_bytes):
-    """Keeps the combined file size of `logs` under max_percent of
-    total_storage_bytes by trimming the oldest entries from the largest
-    log(s) first, so a chatty log can't crowd out flash space needed for
-    everything else on the device."""
-    budget_bytes = total_storage_bytes * max_percent / 100
-    overshoot = sum(log.file_size() for log in logs) - budget_bytes
+def enforce_storage_budget(logs, max_percent, free_bytes):
+    """Keeps the combined file size of `logs` under max_percent of the
+    space that isn't already committed to other (non-log) data, so the
+    logs can't be the reason the flash fills up completely.
+
+    The budget is deliberately based on *headroom* (currently free space
+    plus what the logs themselves already occupy), not on total flash
+    capacity: a fixed share of total capacity stays the same size no
+    matter how much room non-log data actually leaves, so if that grows
+    the logs could still be "within budget" while there's barely any
+    free space left at all. Tying the budget to current headroom instead
+    means at least (100 - max_percent)% of it always stays genuinely
+    free, and the allowed log footprint automatically shrinks as free
+    space shrinks for any other reason."""
+    current_log_bytes = sum(log.file_size() for log in logs)
+    headroom = free_bytes + current_log_bytes
+    budget_bytes = headroom * max_percent / 100
+    overshoot = current_log_bytes - budget_bytes
     if overshoot <= 0:
         return
     for log in sorted(logs, key=lambda l: l.file_size(), reverse=True):

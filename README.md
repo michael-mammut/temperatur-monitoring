@@ -203,7 +203,7 @@ sequenceDiagram
 | [WebServer/statusserver.py](WebServer/statusserver.py) | HTTP-Server: Status-Seite (`/`), Einstellungen (`/settings`, `/wifi-settings`), Statistik (`/statistics`) |
 | [WebServer/settings.py](WebServer/settings.py) | Persistiert den Aquarium-Namen |
 | [WlanNetwork/wifisettings.py](WlanNetwork/wifisettings.py) | Persistiert WLAN-Zugangsdaten, die über `/wifi-settings` geändert wurden |
-| [WebServer/eventlog.py](WebServer/eventlog.py) | Persistierter, auf 200 Einträge begrenzter Event-Log (Basis für Fehler- und Benachrichtigungs-Protokoll); enthält auch `enforce_storage_budget()` (hält Logs zusammen unter ihrem Flash-Anteil) |
+| [WebServer/eventlog.py](WebServer/eventlog.py) | Persistierter, auf 200 Einträge begrenzter Event-Log (Basis für Fehler- und Benachrichtigungs-Protokoll); enthält auch `enforce_storage_budget()` (hält Logs zusammen unter einem Anteil des *verfügbaren* Speichers, nicht der Gesamtkapazität) |
 | [WebServer/errorlog.py](WebServer/errorlog.py) | Fehlerkategorien (System/Hardware/Netzwerk/Externe APIs) + Hilfsfunktion zum Mitschreiben einer Exception |
 | [WebServer/loggingsettings.py](WebServer/loggingsettings.py) | Persistiert, welche Fehlerkategorien überhaupt protokolliert werden (über `/settings` abschaltbar) |
 | [WebServer/loginlog.py](WebServer/loginlog.py) | Persistiert den Zeitpunkt des letzten erfolgreichen Logins |
@@ -304,7 +304,9 @@ Keine Secrets, daher regulär in Git. Werte sind auch über `/settings` zur Lauf
 |---|---|
 | `RAM_FREE_WARNING_PERCENT` | Fällt der freie RAM unter diesen Prozentsatz, wird einmalig eine Telegram-Warnung gesendet (erst nach Erholung über den Schwellwert wieder scharf) |
 | `STORAGE_FREE_WARNING_PERCENT` | Dasselbe für den freien Flash-Speicher |
-| `MAX_LOG_STORAGE_PERCENT` | Fehler- und Benachrichtigungs-Log dürfen zusammen höchstens diesen Anteil des Flash-Speichers belegen — wird bei jedem Loop-Durchlauf geprüft, älteste Einträge werden sonst automatisch entfernt (siehe `WebServer/eventlog.py: enforce_storage_budget()`) |
+| `MAX_LOG_STORAGE_PERCENT` | Fehler- und Benachrichtigungs-Log dürfen zusammen höchstens diesen Anteil des **noch verfügbaren Speichers** belegen (nicht der Gesamtkapazität — siehe Hinweis unten), geprüft bei jedem Loop-Durchlauf; älteste Einträge werden sonst automatisch entfernt (`WebServer/eventlog.py: enforce_storage_budget()`) |
+
+> Das Budget bezieht sich bewusst auf den **Spielraum** (aktuell freier Speicher + aktuelle Log-Größe), nicht auf die Gesamtkapazität. Ein fixer Anteil der Gesamtkapazität bliebe gleich groß, egal wie viel Platz andere Daten tatsächlich noch übrig lassen — würde der freie Speicher aus einem anderen Grund schrumpfen, könnten die Logs trotzdem "im Budget" bleiben, während kaum noch Platz frei ist. Durch die Bindung an den aktuellen Spielraum bleibt immer mindestens `(100 − MAX_LOG_STORAGE_PERCENT)%` davon garantiert frei, und die Logs schrumpfen automatisch mit, wenn der freie Speicher aus anderen Gründen knapper wird.
 
 ## Web-Oberfläche
 
@@ -313,7 +315,7 @@ Keine Secrets, daher regulär in Git. Werte sind auch über `/settings` zur Lauf
 | `http://<IP>/` | öffentlich | Temperaturen, Online-Status, Zeitstempel der letzten Messung |
 | `http://<IP>/settings` | Admin-Passwort | Aquarium-Namen ändern, RAM-/Flash-/Log-Speicher-Warnschwellen anpassen, Fehlerprotokollierung je Kategorie ein-/ausschalten |
 | `http://<IP>/wifi-settings` | Admin-Passwort | WLAN-Netzwerk per Dropdown wählen + neues Passwort setzen; speichert und startet das Gerät neu |
-| `http://<IP>/statistics` | Admin-Passwort | RAM-/Flash-Belegung (inkl. Log-Speicherverbrauch gegen den konfigurierten Deckel), letzter Login, WLAN-Signalstärke, Anzahl gesendeter Benachrichtigungen (30 Tage), Fehler-Diagramm + -Tabelle (30 Tage, nach System/Hardware/Netzwerk/Externe APIs, max. die letzten 20 Zeilen), Formular zum manuellen Löschen von Log-Einträgen älter als X Minuten. Aktualisiert sich automatisch alle 30 s. |
+| `http://<IP>/statistics` | Admin-Passwort | RAM-/Flash-Belegung (inkl. Log-Speicherverbrauch gegen den konfigurierten, vom verfügbaren Speicher abhängigen Deckel), letzter Login, WLAN-Signalstärke, Anzahl gesendeter Benachrichtigungen (30 Tage), Fehler-Diagramm + -Tabelle (30 Tage, nach System/Hardware/Netzwerk/Externe APIs, max. die letzten 20 Zeilen), Formular zum manuellen Löschen von Log-Einträgen älter als X Minuten. Aktualisiert sich automatisch alle 30 s. |
 
 `/` aktualisiert sich ebenfalls automatisch alle 30 s; `/settings` und `/wifi-settings` nicht.
 

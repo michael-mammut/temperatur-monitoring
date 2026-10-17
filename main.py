@@ -109,11 +109,11 @@ class AquariumMonitor:
 
     def _enforce_log_storage_budget(self):
         try:
-            total_bytes = get_storage_stats()['total']
+            free_bytes = get_storage_stats()['free']
         except Exception:
             return
         enforce_storage_budget(
-            [self.error_log, self.notification_log], self.monitoring_settings.get_log_storage_percent(), total_bytes)
+            [self.error_log, self.notification_log], self.monitoring_settings.get_log_storage_percent(), free_bytes)
 
     def _check_resource_usage(self):
         self._check_threshold(

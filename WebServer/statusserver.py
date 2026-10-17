@@ -351,9 +351,14 @@ class StatusServer:
             used += self._notification_log.file_size()
         if storage is None or self._monitoring_settings is None:
             return format_bytes(used)
+        # Mirrors main.py's enforce_storage_budget(): the budget is a share
+        # of headroom (current free space + what the logs already use),
+        # not of total flash capacity - see WebServer/eventlog.py for why.
         budget_percent = self._monitoring_settings.get_log_storage_percent()
-        budget_bytes = storage['total'] * budget_percent / 100
-        return '{} von {} ({:.0f}% Deckel)'.format(format_bytes(used), format_bytes(budget_bytes), budget_percent)
+        headroom = storage['free'] + used
+        budget_bytes = headroom * budget_percent / 100
+        return '{} von {} ({:.0f}% des verfügbaren Speichers)'.format(
+            format_bytes(used), format_bytes(budget_bytes), budget_percent)
 
     def _error_counts_by_category(self):
         counts = {}
