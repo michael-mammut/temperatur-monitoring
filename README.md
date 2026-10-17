@@ -65,7 +65,7 @@ flowchart TD
 
 ### Fehlerprotokollierung — Klassen
 
-Vier Erzeuger (`Temperature`, `WlanConnection`, `Telegram`, `main.py`) schreiben über dieselbe Hilfsfunktion `record_exception()` in ein gemeinsames, von `AquariumMonitor` gehaltenes `EventLog`. `StatusServer` liest daraus für `/statistics`, ohne die Erzeuger selbst zu kennen.
+Vier Erzeuger (`Temperature`, `WlanConnection`, `Telegram`, `main.py`) schreiben über dieselbe Hilfsfunktion `record_exception()` in ein gemeinsames, von `AquariumMonitor` gehaltenes `EventLog`. `WebServer` liest daraus für `/statistics`, ohne die Erzeuger selbst zu kennen.
 
 ```mermaid
 classDiagram
@@ -127,7 +127,7 @@ classDiagram
         -_enforce_log_storage_budget()
     }
 
-    class StatusServer {
+    class WebServer {
         -_error_log : EventLog
         -_notification_log : EventLog
         -_login_log : LoginLog
@@ -156,10 +156,10 @@ classDiagram
 
     AquariumMonitor ..> EventLog : enforce_storage_budget()
 
-    StatusServer ..> EventLog : entries_within() / count_within() / delete_older_than()
-    StatusServer ..> LoginLog : record_login()
-    StatusServer ..> LoggingSettings : is_enabled() / set_enabled()
-    StatusServer ..> MonitoringSettings : get_*_percent()
+    WebServer ..> EventLog : entries_within() / count_within() / delete_older_than()
+    WebServer ..> LoginLog : record_login()
+    WebServer ..> LoggingSettings : is_enabled() / set_enabled()
+    WebServer ..> MonitoringSettings : get_*_percent()
 ```
 
 ### Fehlerprotokollierung — Ablauf (Schreiben + Lesen)
@@ -171,7 +171,7 @@ sequenceDiagram
     participant Rec as record_exception()
     participant Log as EventLog<br/>(error_log.json)
     participant Browser
-    participant Server as StatusServer
+    participant Server as WebServer
 
     Loop->>Sensor: readCurrentAverage()
     Sensor->>Sensor: ds18x20-Lesefehler (OSError)
@@ -200,7 +200,12 @@ sequenceDiagram
 | [WlanNetwork/wlanconnection.py](WlanNetwork/wlanconnection.py) | WLAN-Verbindungsaufbau inkl. NTP-Zeitsynchronisation |
 | [GpioControl/ActorControl.py](GpioControl/ActorControl.py) | Ein-/Ausschalten eines Relais-Kanals |
 | [GpioControl/LedControl.py](GpioControl/LedControl.py) | Status-/Fehler-LEDs blinken lassen |
-| [WebServer/statusserver.py](WebServer/statusserver.py) | HTTP-Server: Status-Seite (`/`), Einstellungen (`/settings`, `/wifi-settings`), Statistik (`/statistics`) |
+| [WebServer/webserver.py](WebServer/webserver.py) | HTTP-Server-Kern: Routing, HTTP-Basic-Auth, Request-Parsing - delegiert das Rendern/die Formularverarbeitung jeder Seite an `WebServer/pages/*.py` |
+| [WebServer/pages/status.py](WebServer/pages/status.py) | Status-Seite (`/`) |
+| [WebServer/pages/settings.py](WebServer/pages/settings.py) | Einstellungen (`/settings`) |
+| [WebServer/pages/wifisettings.py](WebServer/pages/wifisettings.py) | WLAN-Einstellungen (`/wifi-settings`) |
+| [WebServer/pages/statistics.py](WebServer/pages/statistics.py) | Statistik (`/statistics`) |
+| [WebServer/webstyle.py](WebServer/webstyle.py) | Gemeinsames CSS (hell/dunkel) für alle vier Seiten |
 | [WebServer/settings.py](WebServer/settings.py) | Persistiert den Aquarium-Namen |
 | [WlanNetwork/wifisettings.py](WlanNetwork/wifisettings.py) | Persistiert WLAN-Zugangsdaten, die über `/wifi-settings` geändert wurden |
 | [WebServer/eventlog.py](WebServer/eventlog.py) | Persistierter, auf 200 Einträge begrenzter Event-Log (Basis für Fehler- und Benachrichtigungs-Protokoll); enthält auch `enforce_storage_budget()` (hält Logs zusammen unter einem Anteil des *verfügbaren* Speichers, nicht der Gesamtkapazität) |
@@ -349,7 +354,7 @@ Details zur Absicherung (Zugriffsschutz, Eingabevalidierung, bekannte Grenzen) s
    ls /dev/ttyUSB*         # Linux
 
    python3 scripts/deploy_esp32.py                       # komplettes Projekt übertragen
-   python3 scripts/deploy_esp32.py WebServer/statusserver.py   # nur eine einzelne Datei
+   python3 scripts/deploy_esp32.py WebServer/webserver.py   # nur eine einzelne Datei
    python3 scripts/deploy_esp32.py --port /dev/ttyUSB0    # falls der Port nicht /dev/cu.usbserial-0001 ist
    ```
    Welche Dateien übertragen werden, steht in der `FILES`-Liste im Skript — `tests/`, `.github/`, `README.md`, `.gitignore` und `*.example.py` gehören bewusst **nicht** dazu, die bleiben auf dem Dev-Rechner.

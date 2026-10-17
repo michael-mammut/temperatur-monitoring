@@ -13,6 +13,15 @@ eine kleine Web-Oberfläche anbietet (`/`, `/settings`, `/wifi-settings`,
 [SECURITY.md](../../../SECURITY.md), Projekt-Historie in
 [PROJECT.md](../../../PROJECT.md).
 
+`WebServer/webserver.py` (Klasse `WebServer`) ist nur noch der schlanke
+HTTP-Kern - Routing, Auth, Request-Parsing. Jede der vier Seiten hat ihr
+eigenes Modul unter `WebServer/pages/` (`status.py`, `settings.py`,
+`wifisettings.py`, `statistics.py`) mit `render(server, ...)` und ggf.
+`handle_post(server, ...)` als freie Funktionen, die den `server` als
+ersten Parameter bekommen (Zugriff auf z. B. `server._escape_html(...)`,
+`server._error_log`). Neue Seiten/Formulare gehören in ein neues Modul
+unter `pages/`, nicht in `webserver.py` selbst.
+
 ## Bei jeder Code-Änderung
 
 1. **Tests schreiben/anpassen.** Reines `unittest`, keine zusätzlichen
@@ -52,7 +61,7 @@ Dieses Projekt nimmt Eingaben sehr ernst - jeder neue Formular-Wert braucht:
   schützt nicht vor einem direkten, manipulierten POST-Request).
 - **Atomare Speicherung**: Schlägt die Validierung eines Felds fehl, darf
   **kein** anderes Feld aus demselben Formular gespeichert werden (siehe
-  `_handle_settings_post` in `WebServer/statusserver.py` als Referenz-Muster:
+  `handle_post()` in `WebServer/pages/settings.py` als Referenz-Muster:
   erst alle Felder validieren, danach erst irgendetwas schreiben).
 - **HTML-Escaping** jeder Ausgabe, die aus Nutzereingaben oder von außen
   kommt (`_escape_html`), auch bei scheinbar harmlosen Werten (z. B.
@@ -72,7 +81,7 @@ Jede Einstellung, die über `/settings` änderbar ist, folgt demselben Muster
   werfen, nur weil die Datei noch nicht existiert).
 - `set_*()` validiert und wirft `ValueError` bei ungültigem Wert, schreibt
   erst danach.
-- Als optionaler Konstruktor-Parameter (`=None`) in `StatusServer` und
+- Als optionaler Konstruktor-Parameter (`=None`) in `WebServer` und
   `main.py` verdrahten - alles muss ohne diese Einstellung funktionieren
   (Rückwärtskompatibilität für einfachere Tests/ältere Deployments).
 

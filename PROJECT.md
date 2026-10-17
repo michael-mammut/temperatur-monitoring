@@ -109,7 +109,7 @@ echte Hardware zu benötigen.
 | [test_wlanconnection.py](tests/test_wlanconnection.py) | 12 | WLAN-Verbindung, DHCP-Hostname, NTP-Zeitsync-Retry, Netzwerk-Scan (inkl. 30s-Cache), Signalstärke, Fehlerprotokollierung |
 | [test_settings.py](tests/test_settings.py) | 3 | Persistenz des Aquarium-Namens über Neustarts |
 | [test_wifisettings.py](tests/test_wifisettings.py) | 11 | Persistenz + Validierung der WLAN-Zugangsdaten (SSID-/Passwort-Längen nach 802.11/WPA2-Spezifikation) |
-| [test_statusserver.py](tests/test_statusserver.py) | 47 | HTTP-Server: Routing, HTTP-Basic-Auth, HTML-Escaping (XSS), Request-Size-Limit, Statistik-Seite (inkl. Zeilenbegrenzung gegen MemoryError), Warnschwellen-Formular, Protokollierungs-Checkboxen, Logs-löschen-Formular, Datum-/Zeit-Format- + Zeitzonen-Auswahl (inkl. Tagesgrenzen-Übertrag), echte Socket-Kommunikation über Loopback |
+| [test_webserver.py](tests/test_webserver.py) | 47 | HTTP-Server: Routing, HTTP-Basic-Auth, HTML-Escaping (XSS), Request-Size-Limit, Statistik-Seite (inkl. Zeilenbegrenzung gegen MemoryError), Warnschwellen-Formular, Protokollierungs-Checkboxen, Logs-löschen-Formular, Datum-/Zeit-Format- + Zeitzonen-Auswahl (inkl. Tagesgrenzen-Übertrag), echte Socket-Kommunikation über Loopback |
 | [test_eventlog.py](tests/test_eventlog.py) | 15 | Persistierter Event-Log: 30-Tage-Fenster, Begrenzung auf 200 Einträge, Dateigröße, Alters-basiertes Löschen, Speicher-Budget-Durchsetzung |
 | [test_errorlog.py](tests/test_errorlog.py) | 6 | Exception → Fehlerkategorie/-code/-meldung, Ein-/Ausschalten je Kategorie |
 | [test_loggingsettings.py](tests/test_loggingsettings.py) | 4 | Persistenz der Protokollierungs-Ein/Aus-Schalter je Kategorie |

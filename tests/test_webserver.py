@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import micropython_mocks
 micropython_mocks.install()
 
-from WebServer.statusserver import StatusServer
+from WebServer.webserver import WebServer
 
 ADMIN_PASSWORD = "s3cret-admin-pw"
 
@@ -145,7 +145,7 @@ class _FakeLoggingSettings:
 def _new_server(settings=None, wifi_settings=None, admin_password=ADMIN_PASSWORD, reset_callback=None,
                  error_log=None, notification_log=None, login_log=None, monitoring_settings=None,
                  logging_settings=None, datetime_settings=None):
-    return StatusServer(
+    return WebServer(
         0,
         settings or _FakeSettings(),
         wifi_settings or _FakeWifiSettings(),
@@ -935,7 +935,7 @@ class StatisticsPageTests(unittest.TestCase):
                               monitoring_settings=monitoring_settings)
         server._test_monitor = _fake_monitor()
         try:
-            with patch("WebServer.statusserver.get_storage_stats",
+            with patch("WebServer.pages.statistics.get_storage_stats",
                        return_value={'used': 9000, 'free': 1000, 'total': 10000}):
                 request = (
                     "GET /statistics HTTP/1.1\r\nHost: localhost\r\n"

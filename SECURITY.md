@@ -55,7 +55,7 @@ Zeitpunkt, nicht der gerade stattfindende (sonst stünde dort trivial immer
   (`ADMIN_PASSWORD`) — nicht in Git, analog zu den WLAN-/Telegram-Secrets.
 - Ändern: Wert in der Datei anpassen und neu auf den ESP32 übertragen.
 - Der Passwort-Vergleich läuft **konstant-zeitig** (`_constant_time_equals`
-  in [WebServer/statusserver.py](WebServer/statusserver.py)), um
+  in [WebServer/webserver.py](WebServer/webserver.py)), um
   Timing-Angriffe zu erschweren.
 - Ohne oder mit falschem Passwort antwortet das Gerät mit `401 Unauthorized`
   — unabhängig davon, ob der Pfad überhaupt existiert.

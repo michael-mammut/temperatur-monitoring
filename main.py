@@ -16,7 +16,7 @@ from WlanNetwork import config as wlan_config
 from Airpump import config as air_pump_config
 from Monitoring.settings import MonitoringSettings
 from Monitoring import config as monitoring_config
-from WebServer.statusserver import StatusServer
+from WebServer.webserver import WebServer
 from WebServer.settings import Settings
 from WebServer.eventlog import EventLog, enforce_storage_budget
 from WebServer.loginlog import LoginLog
@@ -143,7 +143,7 @@ def main():
     print("+++++ START ++++++")
     monitor = AquariumMonitor()
     wdt = WDT(timeout=WATCHDOG_TIMEOUT_MS)
-    web_server = StatusServer(
+    web_server = WebServer(
         webserver_config.PORT,
         monitor.settings,
         monitor.wifi_settings,

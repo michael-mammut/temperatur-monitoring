@@ -18,7 +18,7 @@ reproduzierbare Probleme damit nicht auftreten:
 
 Benutzung:
     python3 scripts/deploy_esp32.py                  # alle Projektdateien
-    python3 scripts/deploy_esp32.py WebServer/statusserver.py   # nur diese eine Datei
+    python3 scripts/deploy_esp32.py WebServer/webserver.py   # nur diese eine Datei
     python3 scripts/deploy_esp32.py --port /dev/ttyUSB0         # anderer Port (Linux)
 
 Voraussetzung: `pip install pyserial`
@@ -49,13 +49,21 @@ FILES = [
     "Notification/config.py",
     "Temperature/temperature.py",
     "Temperature/config.py",
-    "WebServer/statusserver.py",
+    "WebServer/webserver.py",
+    "WebServer/webstyle.py",
+    "WebServer/pages/__init__.py",
+    "WebServer/pages/status.py",
+    "WebServer/pages/settings.py",
+    "WebServer/pages/wifisettings.py",
+    "WebServer/pages/statistics.py",
     "WebServer/settings.py",
     "WebServer/eventlog.py",
     "WebServer/errorlog.py",
     "WebServer/loggingsettings.py",
     "WebServer/loginlog.py",
     "WebServer/systemstats.py",
+    "WebServer/datetimeformat.py",
+    "WebServer/datetimesettings.py",
     "WebServer/config.py",
     "WlanNetwork/wlanconnection.py",
     "WlanNetwork/wifisettings.py",

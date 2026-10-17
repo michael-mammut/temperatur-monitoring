@@ -23,7 +23,7 @@ def _patch_hardware():
         patch("main.Temperature", side_effect=lambda gpio, **kw: MagicMock(readCurrentAverage=MagicMock(return_value=21.5))),
         patch("main.led_twinkle"),
         patch("main.led_error_twinkle"),
-        patch("main.StatusServer", return_value=MagicMock(handle_requests=MagicMock())),
+        patch("main.WebServer", return_value=MagicMock(handle_requests=MagicMock())),
     ]
 
 
@@ -135,7 +135,7 @@ class MainLoopWatchdogTests(_IsolatedCwdTestCase):
             with self.assertRaises(StopLoop):
                 main.main()
 
-        web_server = main.StatusServer.return_value
+        web_server = main.WebServer.return_value
         self.assertEqual(web_server.handle_requests.call_count, 3)
 
     def test_status_server_is_wired_with_settings_and_admin_password(self):
@@ -156,7 +156,7 @@ class MainLoopWatchdogTests(_IsolatedCwdTestCase):
             with self.assertRaises(StopLoop):
                 main.main()
 
-        args, kwargs = main.StatusServer.call_args
+        args, kwargs = main.WebServer.call_args
         self.assertEqual(args[0], main.webserver_config.PORT)
         self.assertIsInstance(args[1], main.Settings)
         self.assertIsInstance(args[2], main.WifiSettings)
