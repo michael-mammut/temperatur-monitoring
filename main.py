@@ -22,6 +22,7 @@ from WebServer.eventlog import EventLog, enforce_storage_budget
 from WebServer.loginlog import LoginLog
 from WebServer.errorlog import CATEGORY_SYSTEM, record_exception
 from WebServer.loggingsettings import LoggingSettings
+from WebServer.datetimesettings import DateTimeSettings
 from WebServer.systemstats import format_bytes, free_percent, get_memory_stats, get_storage_stats
 from WebServer import config as webserver_config
 import config as project_config
@@ -40,6 +41,7 @@ class AquariumMonitor:
         self.notification_log = EventLog('notification_log.json')
         self.login_log = LoginLog()
         self.logging_settings = LoggingSettings()
+        self.datetime_settings = DateTimeSettings()
         self.monitoring_settings = MonitoringSettings(
             monitoring_config.RAM_FREE_WARNING_PERCENT, monitoring_config.STORAGE_FREE_WARNING_PERCENT,
             monitoring_config.MAX_LOG_STORAGE_PERCENT)
@@ -152,6 +154,7 @@ def main():
         login_log=monitor.login_log,
         monitoring_settings=monitor.monitoring_settings,
         logging_settings=monitor.logging_settings,
+        datetime_settings=monitor.datetime_settings,
     )
     print("----- LOOP START ------")
     while True:

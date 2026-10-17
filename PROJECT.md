@@ -64,6 +64,13 @@ damit der Deckel mitschrumpft, falls der freie Speicher aus anderen
 Gründen knapper wird — ebenfalls über `/settings` änderbar) sowie ein
 Formular auf
 `/statistics`, um Log-Einträge älter als X Minuten manuell zu löschen.
+Außerdem ein einheitliches Datums-/Zeit-Anzeigeformat für alle Seiten,
+wählbar über `/settings` nach Country/Culture (z. B. `17.10.2026
+07:05:09` für Österreich vs. `10/17/2026 07:05:09 AM` für die USA) plus
+ein fester, ebenfalls über `/settings` wählbarer UTC-Offset statt einer
+echten Zeitzone — eine vollständige IANA-Zeitzonendatenbank mit
+Sommerzeit-Regeln je Land wäre für den ESP32-Flash zu groß und könnte
+auf dem Gerät ohnehin nicht aktuell gehalten werden.
 
 ## Wie KI in diesem Projekt eingesetzt wird
 
@@ -102,15 +109,17 @@ echte Hardware zu benötigen.
 | [test_wlanconnection.py](tests/test_wlanconnection.py) | 12 | WLAN-Verbindung, DHCP-Hostname, NTP-Zeitsync-Retry, Netzwerk-Scan (inkl. 30s-Cache), Signalstärke, Fehlerprotokollierung |
 | [test_settings.py](tests/test_settings.py) | 3 | Persistenz des Aquarium-Namens über Neustarts |
 | [test_wifisettings.py](tests/test_wifisettings.py) | 11 | Persistenz + Validierung der WLAN-Zugangsdaten (SSID-/Passwort-Längen nach 802.11/WPA2-Spezifikation) |
-| [test_statusserver.py](tests/test_statusserver.py) | 39 | HTTP-Server: Routing, HTTP-Basic-Auth, HTML-Escaping (XSS), Request-Size-Limit, Statistik-Seite (inkl. Zeilenbegrenzung gegen MemoryError), Warnschwellen-Formular, Protokollierungs-Checkboxen, Logs-löschen-Formular, echte Socket-Kommunikation über Loopback |
-| [test_eventlog.py](tests/test_eventlog.py) | 14 | Persistierter Event-Log: 30-Tage-Fenster, Begrenzung auf 200 Einträge, Dateigröße, Alters-basiertes Löschen, Speicher-Budget-Durchsetzung |
+| [test_statusserver.py](tests/test_statusserver.py) | 47 | HTTP-Server: Routing, HTTP-Basic-Auth, HTML-Escaping (XSS), Request-Size-Limit, Statistik-Seite (inkl. Zeilenbegrenzung gegen MemoryError), Warnschwellen-Formular, Protokollierungs-Checkboxen, Logs-löschen-Formular, Datum-/Zeit-Format- + Zeitzonen-Auswahl (inkl. Tagesgrenzen-Übertrag), echte Socket-Kommunikation über Loopback |
+| [test_eventlog.py](tests/test_eventlog.py) | 15 | Persistierter Event-Log: 30-Tage-Fenster, Begrenzung auf 200 Einträge, Dateigröße, Alters-basiertes Löschen, Speicher-Budget-Durchsetzung |
 | [test_errorlog.py](tests/test_errorlog.py) | 6 | Exception → Fehlerkategorie/-code/-meldung, Ein-/Ausschalten je Kategorie |
 | [test_loggingsettings.py](tests/test_loggingsettings.py) | 4 | Persistenz der Protokollierungs-Ein/Aus-Schalter je Kategorie |
 | [test_loginlog.py](tests/test_loginlog.py) | 3 | Login-Zeitpunkt-Persistenz, Rückgabe des *vorherigen* Logins |
 | [test_systemstats.py](tests/test_systemstats.py) | 2 | RAM-/Flash-Belegung (`used + free == total`) |
 | [test_monitoringsettings.py](tests/test_monitoringsettings.py) | 7 | Persistenz + Validierung der RAM-/Flash-/Log-Speicher-Warnschwellen (5–50 %) |
+| [test_datetimeformat.py](tests/test_datetimeformat.py) | 25 | Datums-/Zeit-Formatierung je Country/Culture (Tag/Monat-Reihenfolge, 12h-/24h-Anzeige inkl. Mitternacht/Mittag), Fallback auf ISO 8601 bei unbekannter Culture, UTC-Offset-Verschiebung inkl. Tages-/Monats-/Jahres-/Schaltjahr-Übertrag, Halb-/Viertelstunden-Offsets |
+| [test_datetimesettings.py](tests/test_datetimesettings.py) | 7 | Persistenz + Validierung der gewählten Culture und des UTC-Offsets, Fallback bei veralteter/ungültiger gespeicherter Culture bzw. Offset |
 
-**Gesamt: 135 Tests**, Stand des letzten vollständigen Durchlaufs in diesem
+**Gesamt: 176 Tests**, Stand des letzten vollständigen Durchlaufs in diesem
 Dokument. Viele Tests sind als Regressionstests für konkret auf der
 Hardware beobachtete Bugs angelegt (siehe Docstrings in den jeweiligen
 Testdateien) — sie beschreiben bewusst, *welches reale Problem* sie

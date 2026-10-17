@@ -167,6 +167,7 @@ class MainLoopWatchdogTests(_IsolatedCwdTestCase):
         self.assertIsInstance(kwargs["login_log"], main.LoginLog)
         self.assertIsInstance(kwargs["monitoring_settings"], main.MonitoringSettings)
         self.assertIsInstance(kwargs["logging_settings"], main.LoggingSettings)
+        self.assertIsInstance(kwargs["datetime_settings"], main.DateTimeSettings)
 
     def test_error_log_is_passed_to_sensors_wlan_and_telegram(self):
         """Regression target: without this wiring, hardware/network/API

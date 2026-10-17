@@ -106,6 +106,26 @@ class _FakeMonitoringSettings:
         self.saved_thresholds = (ram_percent, storage_percent, log_storage_percent)
 
 
+class _FakeDateTimeSettings:
+    def __init__(self, culture='iso', utc_offset_minutes=0):
+        self._culture = culture
+        self._utc_offset_minutes = utc_offset_minutes
+        self.saved_culture = None
+        self.saved_utc_offset_minutes = None
+
+    def get_culture(self):
+        return self._culture
+
+    def get_utc_offset_minutes(self):
+        return self._utc_offset_minutes
+
+    def set(self, culture, utc_offset_minutes):
+        self._culture = culture
+        self._utc_offset_minutes = utc_offset_minutes
+        self.saved_culture = culture
+        self.saved_utc_offset_minutes = utc_offset_minutes
+
+
 class _FakeLoggingSettings:
     def __init__(self, enabled=None):
         from WebServer.errorlog import ALL_CATEGORIES
@@ -124,7 +144,7 @@ class _FakeLoggingSettings:
 
 def _new_server(settings=None, wifi_settings=None, admin_password=ADMIN_PASSWORD, reset_callback=None,
                  error_log=None, notification_log=None, login_log=None, monitoring_settings=None,
-                 logging_settings=None):
+                 logging_settings=None, datetime_settings=None):
     return StatusServer(
         0,
         settings or _FakeSettings(),
@@ -136,6 +156,7 @@ def _new_server(settings=None, wifi_settings=None, admin_password=ADMIN_PASSWORD
         login_log=login_log,
         monitoring_settings=monitoring_settings,
         logging_settings=logging_settings,
+        datetime_settings=datetime_settings,
     )
 
 
@@ -482,6 +503,142 @@ class LoggingSettingsOnSettingsPageTests(unittest.TestCase):
 
         self.assertIn("Fehler", response)
         self.assertIsNone(logging_settings.saved_enabled)
+
+    def test_get_settings_shows_culture_dropdown_with_current_selection(self):
+        datetime_settings = _FakeDateTimeSettings(culture='de_AT', utc_offset_minutes=60)
+        server = _new_server(datetime_settings=datetime_settings)
+        server._test_monitor = _fake_monitor()
+        try:
+            request = (
+                "GET /settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
+            ).encode()
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn('name="culture"', response)
+        self.assertIn('<option value="de_AT" selected>', response)
+        self.assertIn('<option value="iso">', response)  # not selected
+        self.assertIn('name="utc_offset_minutes"', response)
+        self.assertIn('<option value="60" selected>', response)
+        self.assertIn('<option value="0">', response)  # not selected
+
+    def test_settings_page_without_datetime_settings_omits_culture_field(self):
+        """Backward compatible: callers that don't pass datetime_settings
+        must not break."""
+        server = _new_server(datetime_settings=None)
+        server._test_monitor = _fake_monitor()
+        try:
+            request = (
+                "GET /settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
+            ).encode()
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertNotIn('name="culture"', response)
+        self.assertNotIn('name="utc_offset_minutes"', response)
+
+    def test_post_settings_saves_culture_and_timezone(self):
+        datetime_settings = _FakeDateTimeSettings(culture='iso', utc_offset_minutes=0)
+        server = _new_server(datetime_settings=datetime_settings)
+        server._test_monitor = _fake_monitor()
+        try:
+            body = b"name=Vorzimmer&culture=en_US&utc_offset_minutes=-480"
+            request = (
+                "POST /settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n"
+                "Content-Type: application/x-www-form-urlencoded\r\n"
+                "Content-Length: " + str(len(body)) + "\r\n\r\n"
+            ).encode() + body
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("200 OK", response)
+        self.assertIn("Gespeichert", response)
+        self.assertEqual(datetime_settings.saved_culture, 'en_US')
+        self.assertEqual(datetime_settings.saved_utc_offset_minutes, -480)
+
+    def test_post_settings_with_unknown_culture_saves_nothing(self):
+        """Atomic with the other /settings fields, and a defense against a
+        crafted request sending a culture value that was never offered in
+        the dropdown."""
+        settings = _FakeSettings("Vorzimmer")
+        datetime_settings = _FakeDateTimeSettings(culture='iso', utc_offset_minutes=0)
+        server = _new_server(settings=settings, datetime_settings=datetime_settings)
+        server._test_monitor = _fake_monitor(name="Vorzimmer")
+        try:
+            body = b"name=Wohnzimmer&culture=fr_FR&utc_offset_minutes=0"
+            request = (
+                "POST /settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n"
+                "Content-Type: application/x-www-form-urlencoded\r\n"
+                "Content-Length: " + str(len(body)) + "\r\n\r\n"
+            ).encode() + body
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("Fehler", response)
+        self.assertEqual(settings.get_name(), "Vorzimmer")  # unchanged
+        self.assertIsNone(datetime_settings.saved_culture)
+
+    def test_post_settings_with_unknown_utc_offset_saves_nothing(self):
+        """Defense against a crafted request sending an offset that was
+        never offered in the dropdown (e.g. a bogus 37-minute offset)."""
+        settings = _FakeSettings("Vorzimmer")
+        datetime_settings = _FakeDateTimeSettings(culture='iso', utc_offset_minutes=0)
+        server = _new_server(settings=settings, datetime_settings=datetime_settings)
+        server._test_monitor = _fake_monitor(name="Vorzimmer")
+        try:
+            body = b"name=Wohnzimmer&culture=iso&utc_offset_minutes=37"
+            request = (
+                "POST /settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n"
+                "Content-Type: application/x-www-form-urlencoded\r\n"
+                "Content-Length: " + str(len(body)) + "\r\n\r\n"
+            ).encode() + body
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("Fehler", response)
+        self.assertEqual(settings.get_name(), "Vorzimmer")  # unchanged
+        self.assertIsNone(datetime_settings.saved_utc_offset_minutes)
+
+    def test_render_formats_last_measurement_using_configured_culture(self):
+        datetime_settings = _FakeDateTimeSettings(culture='de_AT', utc_offset_minutes=0)
+        server = _new_server(datetime_settings=datetime_settings)
+        try:
+            html = server.render(_fake_monitor(measured_at=(2026, 10, 17, 6, 5, 9, 0, 0)))
+        finally:
+            server._socket.close()
+
+        self.assertIn("17.10.2026 06:05:09 UTC", html)
+
+    def test_render_applies_configured_utc_offset_including_day_rollover(self):
+        """+10h on 2026-10-17 23:30 UTC must roll over into the next day,
+        not just add 10 to the hour field."""
+        datetime_settings = _FakeDateTimeSettings(culture='iso', utc_offset_minutes=600)
+        server = _new_server(datetime_settings=datetime_settings)
+        try:
+            html = server.render(_fake_monitor(measured_at=(2026, 10, 17, 23, 30, 0, 0, 0)))
+        finally:
+            server._socket.close()
+
+        self.assertIn("2026-10-18 09:30:00 UTC+10", html)
+
+    def test_render_without_datetime_settings_defaults_to_iso(self):
+        server = _new_server(datetime_settings=None)
+        try:
+            html = server.render(_fake_monitor(measured_at=(2026, 10, 17, 6, 5, 9, 0, 0)))
+        finally:
+            server._socket.close()
+
+        self.assertIn("2026-10-17 06:05:09 UTC", html)
 
 
 class WifiSettingsPageTests(unittest.TestCase):

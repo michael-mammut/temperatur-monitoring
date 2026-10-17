@@ -207,6 +207,8 @@ sequenceDiagram
 | [WebServer/errorlog.py](WebServer/errorlog.py) | Fehlerkategorien (System/Hardware/Netzwerk/Externe APIs) + Hilfsfunktion zum Mitschreiben einer Exception |
 | [WebServer/loggingsettings.py](WebServer/loggingsettings.py) | Persistiert, welche Fehlerkategorien überhaupt protokolliert werden (über `/settings` abschaltbar) |
 | [WebServer/loginlog.py](WebServer/loginlog.py) | Persistiert den Zeitpunkt des letzten erfolgreichen Logins |
+| [WebServer/datetimeformat.py](WebServer/datetimeformat.py) | Formatiert einen Zeitstempel als Country/Culture-abhängigen String, verschoben um einen festen UTC-Offset (z. B. `17.10.2026 07:05:09 UTC+01` für Österreich vs. `10/17/2026 06:05:09 AM UTC` für die USA) - zentral für alle Datums-/Zeit-Anzeigen, analog zu `format_bytes()` für Zahlenwerte. Die Offset-Verschiebung selbst rechnet in reiner Integer-Arithmetik (Tage/Monate/Jahre korrekt inkl. Schaltjahr), bewusst ohne `time.mktime()` - das behandelt das Tupel auf CPython als *lokale* Zeit (abhängig von der Host-Zeitzone) und hat auf MicroPython gar kein Zeitzonen-Konzept, beide Plattformen würden sich also unterscheiden |
+| [WebServer/datetimesettings.py](WebServer/datetimesettings.py) | Persistiert die gewählte Country/Culture + den UTC-Offset für die Datums-/Zeit-Anzeige (über `/settings` änderbar) |
 | [WebServer/systemstats.py](WebServer/systemstats.py) | RAM- und Flash-Belegung (`gc`, `os.statvfs`) |
 | [Monitoring/settings.py](Monitoring/settings.py) | Persistiert die RAM-/Flash-Warnschwellen und den Log-Speicher-Deckel, die über `/settings` geändert wurden |
 | `*/config.py` | Je Modul eigene Konfiguration (siehe unten) |
@@ -313,11 +315,13 @@ Keine Secrets, daher regulär in Git. Werte sind auch über `/settings` zur Lauf
 | URL | Zugriff | Zweck |
 |---|---|---|
 | `http://<IP>/` | öffentlich | Temperaturen, Online-Status, Zeitstempel der letzten Messung |
-| `http://<IP>/settings` | Admin-Passwort | Aquarium-Namen ändern, RAM-/Flash-/Log-Speicher-Warnschwellen anpassen, Fehlerprotokollierung je Kategorie ein-/ausschalten |
+| `http://<IP>/settings` | Admin-Passwort | Aquarium-Namen ändern, RAM-/Flash-/Log-Speicher-Warnschwellen anpassen, Datum-/Zeit-Anzeigeformat (Country/Culture) + Zeitzone (fester UTC-Offset) wählen, Fehlerprotokollierung je Kategorie ein-/ausschalten |
 | `http://<IP>/wifi-settings` | Admin-Passwort | WLAN-Netzwerk per Dropdown wählen + neues Passwort setzen; speichert und startet das Gerät neu |
 | `http://<IP>/statistics` | Admin-Passwort | RAM-/Flash-Belegung (inkl. Log-Speicherverbrauch gegen den konfigurierten, vom verfügbaren Speicher abhängigen Deckel), letzter Login, WLAN-Signalstärke, Anzahl gesendeter Benachrichtigungen (30 Tage), Fehler-Diagramm + -Tabelle (30 Tage, nach System/Hardware/Netzwerk/Externe APIs, max. die letzten 20 Zeilen), Formular zum manuellen Löschen von Log-Einträgen älter als X Minuten. Aktualisiert sich automatisch alle 30 s. |
 
 `/` aktualisiert sich ebenfalls automatisch alle 30 s; `/settings` und `/wifi-settings` nicht.
+
+> **Zeitzone ist ein fester UTC-Offset, keine echte Zeitzone.** Der ESP32 hat weder genug Flash für eine vollständige IANA-Zeitzonendatenbank (Sommerzeit-Regeln je Land, mehrere hundert KB) noch einen Mechanismus, um solche Regeln aktuell zu halten. Der Offset wird deshalb per `/settings` manuell gewählt (z. B. "UTC+01:00 (Wien, Berlin, Paris, Rom)") und bleibt fix — bei Sommer-/Winterzeit-Umstellung muss er von Hand angepasst werden, genau wie bei anderen kleinen IoT-Geräten (Shelly, Tasmota) ohne eigene Zeitzonen-Datenbank.
 
 Details zur Absicherung (Zugriffsschutz, Eingabevalidierung, bekannte Grenzen) stehen in [SECURITY.md](SECURITY.md).
 

@@ -2,6 +2,9 @@ import socket
 import time
 import ubinascii
 
+from WebServer.datetimeformat import (
+    CULTURES, DEFAULT_CULTURE, DEFAULT_UTC_OFFSET_MINUTES, UTC_OFFSETS, VALID_OFFSET_MINUTES, format_datetime,
+)
 from WebServer.errorlog import ALL_CATEGORIES, CATEGORY_LABELS, CATEGORY_SYSTEM
 from WebServer.systemstats import format_bytes, get_memory_stats, get_storage_stats
 
@@ -110,7 +113,7 @@ svg text { fill: var(--fg); }
 class StatusServer:
     def __init__(self, port, settings, wifi_settings, admin_password, reset_callback,
                  error_log=None, notification_log=None, login_log=None, monitoring_settings=None,
-                 logging_settings=None):
+                 logging_settings=None, datetime_settings=None):
         self._settings = settings
         self._wifi_settings = wifi_settings
         self._admin_password = admin_password
@@ -120,6 +123,7 @@ class StatusServer:
         self._login_log = login_log
         self._monitoring_settings = monitoring_settings
         self._logging_settings = logging_settings
+        self._datetime_settings = datetime_settings
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._socket.bind(('0.0.0.0', port))
@@ -179,6 +183,7 @@ class StatusServer:
     def _handle_settings_post(self, monitor, body):
         name = self._parse_form_field(body, 'name')
         ram_value = storage_value = log_storage_value = None
+        culture = utc_offset_minutes = None
         error = None
 
         if self._monitoring_settings is not None:
@@ -189,6 +194,15 @@ class StatusServer:
                 self._parse_form_field(body, 'log_storage_percent'))
             error = ram_error or storage_error or log_storage_error
 
+        if not error and self._datetime_settings is not None:
+            culture = self._parse_form_field(body, 'culture')
+            try:
+                utc_offset_minutes = int(self._parse_form_field(body, 'utc_offset_minutes'))
+            except (TypeError, ValueError):
+                utc_offset_minutes = None
+            if culture not in CULTURES or utc_offset_minutes not in VALID_OFFSET_MINUTES:
+                error = 'Ungültiges Datum-/Zeit-Format oder Zeitzone.'
+
         if not error:
             if name and name.strip():
                 name = name.strip()[:64]
@@ -196,6 +210,8 @@ class StatusServer:
                 monitor.telegram.set_project_name(name)
             if self._monitoring_settings is not None:
                 self._monitoring_settings.set_thresholds(ram_value, storage_value, log_storage_value)
+            if self._datetime_settings is not None:
+                self._datetime_settings.set(culture, utc_offset_minutes)
             if self._logging_settings is not None:
                 enabled_by_category = {
                     category: self._parse_form_field(body, 'log_' + category) is not None
@@ -279,6 +295,27 @@ class StatusServer:
                 min=MIN_WARNING_PERCENT, max=MAX_WARNING_PERCENT,
             )
 
+        datetime_fields = ''
+        if self._datetime_settings is not None:
+            current_culture = self._datetime_settings.get_culture()
+            culture_options = []
+            for code, label in CULTURES.items():
+                selected = ' selected' if code == current_culture else ''
+                culture_options.append('<option value="{0}"{1}>{2}</option>'.format(
+                    code, selected, self._escape_html(label)))
+
+            current_offset = self._datetime_settings.get_utc_offset_minutes()
+            offset_options = []
+            for minutes, label in UTC_OFFSETS:
+                selected = ' selected' if minutes == current_offset else ''
+                offset_options.append('<option value="{0}"{1}>{2}</option>'.format(
+                    minutes, selected, self._escape_html(label)))
+
+            datetime_fields = (
+                '<label>Datum-/Zeit-Format:\n<select name="culture">\n{culture_options}\n</select>\n</label>\n'
+                '<label>Zeitzone:\n<select name="utc_offset_minutes">\n{offset_options}\n</select>\n</label>\n'
+            ).format(culture_options='\n'.join(culture_options), offset_options='\n'.join(offset_options))
+
         logging_fields = ''
         if self._logging_settings is not None:
             checkboxes = []
@@ -303,6 +340,7 @@ class StatusServer:
 <form method="POST" action="/settings">
 <label>Aquarium-Name: <input type="text" name="name" value="{name}" maxlength="64"></label>
 {monitoring_fields}
+{datetime_fields}
 {logging_fields}
 <button type="submit">Speichern</button>
 </form>
@@ -310,7 +348,8 @@ class StatusServer:
 </div>
 </body>
 </html>
-""".format(style=_STYLE, message=message, name=name, monitoring_fields=monitoring_fields, logging_fields=logging_fields)
+""".format(style=_STYLE, message=message, name=name, monitoring_fields=monitoring_fields,
+           datetime_fields=datetime_fields, logging_fields=logging_fields)
 
     def render_wifi_settings(self, monitor, saved=False, error=None, ssid=None):
         current_ssid = self._escape_html(self._wifi_settings.get_ssid())
@@ -533,6 +572,13 @@ class StatusServer:
             return "nicht verfügbar"
         return "{} dBm".format(rssi)
 
+    def _current_culture(self):
+        return self._datetime_settings.get_culture() if self._datetime_settings is not None else DEFAULT_CULTURE
+
+    def _current_utc_offset(self):
+        return (self._datetime_settings.get_utc_offset_minutes()
+                if self._datetime_settings is not None else DEFAULT_UTC_OFFSET_MINUTES)
+
     def _format_login_time(self, timestamp):
         if timestamp is None:
             return "noch nie"
@@ -541,8 +587,7 @@ class StatusServer:
     def _format_epoch(self, timestamp):
         if timestamp is None:
             return "n/a"
-        year, month, day, hour, minute, second = time.gmtime(int(timestamp))[0:6]
-        return "{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}".format(year, month, day, hour, minute, second)
+        return format_datetime(time.gmtime(int(timestamp)), self._current_culture(), self._current_utc_offset())
 
     def _record_login(self):
         if self._login_log is None:
@@ -656,5 +701,4 @@ class StatusServer:
     def _format_time(self, value):
         if value is None:
             return "n/a"
-        year, month, day, hour, minute, second = value[0:6]
-        return "{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d} UTC".format(year, month, day, hour, minute, second)
+        return format_datetime(value, self._current_culture(), self._current_utc_offset())
