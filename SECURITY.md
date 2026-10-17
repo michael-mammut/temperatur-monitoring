@@ -1,7 +1,7 @@
 # Sicherheit: WLAN-Zugangsdaten & Web-Oberfläche
 
 Dieses Dokument beschreibt, wie WLAN-Zugangsdaten gespeichert werden, wie die
-Web-Oberfläche (`/settings`, `/wifi-settings`, `/statistics`) abgesichert ist,
+Web-Oberfläche (`/settings`, `/datetime-settings`, `/wifi-settings`, `/statistics`) abgesichert ist,
 und welche Grenzen diese Absicherung bewusst hat.
 
 ## Wo WLAN-Zugangsdaten gespeichert werden
@@ -40,12 +40,14 @@ dagegen ist physische Zugangskontrolle zum Gerät selbst, keine Software.
 
 ## Zugriffsschutz für die Web-Oberfläche
 
-`/settings` (Aquarium-Name ändern), `/wifi-settings` (WLAN-Zugangsdaten
-ändern) und `/statistics` (System-/Fehlerstatistik) sind per **HTTP Basic
-Auth** geschützt. `/` (Status-Seite) bleibt bewusst öffentlich — sie zeigt
-nur Messwerte, keine sensiblen Daten.
+`/settings` (Aquarium-Name, Warnschwellen, Protokollierung),
+`/datetime-settings` (Datum-/Zeit-Format, Zeitzone, EU-Sommerzeit),
+`/wifi-settings` (WLAN-Zugangsdaten ändern) und `/statistics`
+(System-/Fehlerstatistik) sind per **HTTP Basic Auth** geschützt. `/`
+(Status-Seite) bleibt bewusst öffentlich — sie zeigt nur Messwerte,
+keine sensiblen Daten.
 
-Jeder erfolgreiche Login auf einer der drei geschützten Seiten wird
+Jeder erfolgreiche Login auf einer der vier geschützten Seiten wird
 persistiert ([WebServer/loginlog.py](WebServer/loginlog.py)) und auf
 `/statistics` als "Letzter Login" angezeigt — dabei immer der *vorherige*
 Zeitpunkt, nicht der gerade stattfindende (sonst stünde dort trivial immer
@@ -72,9 +74,9 @@ Zeitpunkt, nicht der gerade stattfindende (sonst stünde dort trivial immer
 | XSS über Fehlermeldungen auf `/statistics` | Fehlermeldungen stammen aus internem Exception-Text, nicht direkt aus Nutzereingaben — werden aber trotzdem HTML-escaped ausgegeben, falls eine Meldung einmal externe Daten enthält (z. B. eine Server-Antwort) |
 | Unbegrenztes Wachstum von Fehler-/Benachrichtigungs-Log | [WebServer/eventlog.py](WebServer/eventlog.py) begrenzt jedes Log hart auf 200 Einträge, unabhängig vom Alter — ein Crash-Loop kann die Datei (und die JSON-Parse-Kosten beim Laden) nicht unbegrenzt wachsen lassen |
 | `MemoryError` beim Rendern von `/statistics` durch zu viele Fehler-Zeilen in einem Stück | Tabelle zeigt maximal die letzten 20 von bis zu 200 Einträgen — auf echter Hardware reproduziert und verifiziert (ein `join()` über 200 Zeilen schlug an der Heap-Fragmentierung fehl, auch bei insgesamt ausreichend freiem Speicher) |
-| `MemoryError` beim Rendern von `/settings` (größte Seite: Name + Schwellwerte + Datum-/Zeit-/Zeitzonen-Dropdowns + Protokollierungs-Checkboxen in einem String) | `WebServer/webserver.py` ruft `gc.collect()` direkt vor dem Bearbeiten jeder Anfrage auf — `main.py`s eigener `gc.collect()` läuft erst *nach* `handle_requests()`, sodass die Fragmentierung aus dem Rest des vorherigen Loop-Durchlaufs (Sensoren, WLAN, Telegram) sonst noch da wäre, wenn die Anfrage reinkommt. Auf echter Hardware reproduziert (schlug mit `MemoryError: ... allocating 6008 bytes` fehl, trotz >60 KB insgesamt freiem RAM) und mit demselben Request nach dem Fix dreimal in Folge erfolgreich verifiziert |
+| `MemoryError` beim Rendern von `/settings` (wurde zur größten Seite: Name + Schwellwerte + Datum-/Zeit-/Zeitzonen-/Sommerzeit-Felder + Protokollierungs-Checkboxen in einem String) | Drei sich ergänzende Maßnahmen: (1) `WebServer/webserver.py` ruft `gc.collect()` direkt vor dem Bearbeiten jeder Anfrage auf — `main.py`s eigener `gc.collect()` läuft erst *nach* `handle_requests()`, sodass die Fragmentierung aus dem Rest des vorherigen Loop-Durchlaufs sonst noch da wäre. (2) Reicht das nicht (Fragmentierung entsteht auch *während* des Renderns selbst), fängt `_render_with_retry()` einen `MemoryError` ab, sammelt erneut und versucht es genau einmal erneut, statt dass der Client eine leere Antwort bekommt. (3) Ursächlicher: Datum-/Zeit-/Zeitzonen-/Sommerzeit-Felder wurden auf eine eigene Seite (`/datetime-settings`) ausgelagert, weil das Culture-/Zeitzonen-Dropdown allein ~45 Optionen hat und mit Abstand der größte Einzel-Block war — senkt die größte benötigte Allokation von ~9,7 KB auf ~5,8 KB. Alle drei auf echter Hardware reproduziert und verifiziert: der ursprüngliche Fehler (`MemoryError: ... allocating 6008 bytes` trotz >60 KB freiem RAM), die Selbstheilung (künstlich injizierter `MemoryError` beim ersten Versuch, Erfolg beim zweiten) und die gemessene Größenreduktion durch die Seiten-Aufteilung |
 | Ungültige RAM-/Flash-/Log-Warnschwelle auf `/settings` | Werte müssen zwischen 5 % und 50 % liegen ([Monitoring/settings.py](Monitoring/settings.py)); eine fehlgeschlagene Validierung speichert **nichts** — auch nicht den gleichzeitig eingereichten Aquarium-Namen oder die Protokollierungs-Checkboxen (atomar) |
-| Manipulierte Country/Culture- oder UTC-Offset-Werte auf `/settings` (z. B. ein nie angebotener Offset wie 37 Minuten) | Beide Werte werden serverseitig gegen die feste Liste der angebotenen Optionen geprüft ([WebServer/datetimesettings.py](WebServer/datetimesettings.py)); eine fehlgeschlagene Validierung speichert **nichts** — atomar mit Name, Warnschwellen und Protokollierungs-Checkboxen |
+| Manipulierte Country/Culture- oder UTC-Offset-Werte auf `/datetime-settings` (z. B. ein nie angebotener Offset wie 37 Minuten) | Beide Werte werden serverseitig gegen die feste Liste der angebotenen Optionen geprüft ([WebServer/datetimesettings.py](WebServer/datetimesettings.py)); eine fehlgeschlagene Validierung speichert **nichts** — atomar mit der EU-Sommerzeit-Checkbox |
 | Unkontrolliertes Wachstum der Logs relativ zum Flash-Speicher | `enforce_storage_budget()` ([WebServer/eventlog.py](WebServer/eventlog.py)) hält Fehler- + Benachrichtigungs-Log zusammen unter einem konfigurierbaren Anteil (Default 15 %) des *verfügbaren* Speichers (frei + aktuelle Log-Größe) — nicht der Gesamtkapazität, damit der Deckel automatisch mitschrumpft, falls der freie Speicher aus anderen Gründen knapper wird. Geprüft bei jedem Loop-Durchlauf, unabhängig vom 200-Einträge-Limit pro Log. |
 | Ungültige Minutenangabe beim manuellen Logs-Löschen auf `/statistics` | Nicht-numerische oder nicht-positive Werte werden abgelehnt, ohne irgendetwas zu löschen |
 

@@ -4,6 +4,7 @@ import time
 import ubinascii
 
 from WebServer.datetimeformat import DEFAULT_CULTURE, DEFAULT_UTC_OFFSET_MINUTES
+from WebServer.pages import datetimesettings as datetimesettings_page
 from WebServer.pages import settings as settings_page
 from WebServer.pages import statistics as statistics_page
 from WebServer.pages import status as status_page
@@ -15,7 +16,11 @@ from WebServer.pages import wifisettings as wifisettings_page
 # bytes for a request, so the rest is simply never read.
 _MAX_REQUEST_BYTES = 2048
 
-_PROTECTED_PATHS = ('/settings', '/wifi-settings', '/statistics')
+_PROTECTED_PATHS = ('/settings', '/wifi-settings', '/statistics', '/datetime-settings')
+
+# One retry after a MemoryError (see _render_with_retry): the first
+# attempt plus one more after an extra gc.collect().
+_MAX_RENDER_ATTEMPTS = 2
 
 
 class WebServer:
@@ -53,41 +58,12 @@ class WebServer:
             client.settimeout(2)
             method, path, headers, body = self._parse_request(client.recv(_MAX_REQUEST_BYTES))
 
-            # Rendering a page needs one contiguous allocation of a few KB
-            # for the final HTML string. main.py's own gc.collect() only
-            # runs *after* handle_requests() returns, so whatever the rest
-            # of the loop iteration (sensors, WLAN, Telegram) fragmented
-            # the heap with since then is still there - collecting here,
-            # right before the heaviest allocation, is what actually
-            # matters. Reproduced on real hardware: /settings (the biggest
-            # page) failed with MemoryError without this, even with tens
-            # of KB of total free RAM - a fragmentation problem, not a
-            # total-memory one.
-            gc.collect()
-
             if path in _PROTECTED_PATHS and not self._is_authorized(headers):
                 response = self._unauthorized_response()
-            elif path == '/settings' and method == 'POST':
-                self._record_login()
-                response = self._html_response(settings_page.handle_post(self, monitor, body))
-            elif path == '/settings':
-                self._record_login()
-                response = self._html_response(self.render_settings())
-            elif path == '/wifi-settings' and method == 'POST':
-                self._record_login()
-                html, should_reset = wifisettings_page.handle_post(self, monitor, body)
-                response = self._html_response(html)
-            elif path == '/wifi-settings':
-                self._record_login()
-                response = self._html_response(self.render_wifi_settings(monitor))
-            elif path == '/statistics' and method == 'POST':
-                previous_login = self._record_login()
-                response = self._html_response(statistics_page.handle_post(self, monitor, body, previous_login))
-            elif path == '/statistics':
-                previous_login = self._record_login()
-                response = self._html_response(self.render_statistics(monitor, previous_login))
             else:
-                response = self._html_response(self.render(monitor))
+                previous_login = self._record_login() if path in _PROTECTED_PATHS else None
+                html, should_reset = self._render_with_retry(monitor, method, path, body, previous_login)
+                response = self._html_response(html)
 
             client.send(response.encode('utf-8'))
             if should_reset:
@@ -101,6 +77,65 @@ class WebServer:
             print("WebServer request failed:", exc)
         finally:
             client.close()
+
+    def _render_with_retry(self, monitor, method, path, body, previous_login):
+        # Building a page's final HTML needs one contiguous allocation of
+        # a few KB. main.py's own gc.collect() only runs *after*
+        # handle_requests() returns, so whatever the rest of the loop
+        # iteration (sensors, WLAN, Telegram) fragmented the heap with
+        # since then is still there when a request comes in - a plain
+        # gc.collect() right here covers most cases (reproduced on real
+        # hardware: /settings, the biggest page, failed with MemoryError
+        # without it, even with tens of KB of total free RAM - a
+        # fragmentation problem, not a total-memory one).
+        #
+        # But the heap keeps fragmenting *while* a page is being built
+        # too (e.g. /settings iterates ~45 culture/timezone dropdown
+        # options, each a small allocation) - as pages grow, one
+        # gc.collect() before we even start isn't guaranteed to still be
+        # enough by the time the final big string gets assembled. Rather
+        # than chase that with more and more manually-placed collect()
+        # calls, treat a MemoryError here as transient and self-heal:
+        # collect again and retry exactly once. This covers every page,
+        # including ones that don't exist yet.
+        #
+        # A retry re-runs the whole handler, including any save/delete a
+        # POST already did before the MemoryError hit (e.g. in the final
+        # render() call) - accepted here since every such action is
+        # idempotent (saving the same settings again, deleting entries
+        # that are already gone) except the "N Log-Einträge gelöscht"
+        # count on /statistics, which could under-report on a retry.
+        # Cosmetic, and only possible in this already-rare case.
+        last_error = None
+        for _attempt in range(_MAX_RENDER_ATTEMPTS):
+            gc.collect()
+            try:
+                return self._dispatch(monitor, method, path, body, previous_login)
+            except MemoryError as exc:
+                last_error = exc
+        raise last_error
+
+    def _dispatch(self, monitor, method, path, body, previous_login):
+        should_reset = False
+        if path == '/settings' and method == 'POST':
+            html = settings_page.handle_post(self, monitor, body)
+        elif path == '/settings':
+            html = self.render_settings()
+        elif path == '/wifi-settings' and method == 'POST':
+            html, should_reset = wifisettings_page.handle_post(self, monitor, body)
+        elif path == '/wifi-settings':
+            html = self.render_wifi_settings(monitor)
+        elif path == '/statistics' and method == 'POST':
+            html = statistics_page.handle_post(self, monitor, body, previous_login)
+        elif path == '/statistics':
+            html = self.render_statistics(monitor, previous_login)
+        elif path == '/datetime-settings' and method == 'POST':
+            html = datetimesettings_page.handle_post(self, body)
+        elif path == '/datetime-settings':
+            html = self.render_datetime_settings()
+        else:
+            html = self.render(monitor)
+        return html, should_reset
 
     # -- page rendering (thin delegators to WebServer/pages/*) -------------
 
@@ -116,6 +151,9 @@ class WebServer:
     def render_statistics(self, monitor, previous_login, message=None):
         return statistics_page.render(self, monitor, previous_login, message=message)
 
+    def render_datetime_settings(self, saved=False, error=None):
+        return datetimesettings_page.render(self, saved=saved, error=error)
+
     # -- helpers shared by more than one page -------------------------------
 
     def _current_culture(self):
@@ -124,6 +162,9 @@ class WebServer:
     def _current_utc_offset(self):
         return (self._datetime_settings.get_utc_offset_minutes()
                 if self._datetime_settings is not None else DEFAULT_UTC_OFFSET_MINUTES)
+
+    def _current_eu_summer_time(self):
+        return self._datetime_settings.get_eu_summer_time() if self._datetime_settings is not None else False
 
     def _record_login(self):
         if self._login_log is None:

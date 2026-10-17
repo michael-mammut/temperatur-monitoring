@@ -47,7 +47,7 @@ def render(server, monitor, saved=False, error=None, ssid=None):
 <label>Passwort: <input type="password" name="password" maxlength="63" autocomplete="new-password"></label>
 <button type="submit">Verbinden</button>
 </form>
-<p class="nav"><a href="/">Status</a> | <a href="/settings">Einstellungen</a> | <a href="/statistics">Statistik</a></p>
+<p class="nav"><a href="/">Status</a> | <a href="/settings">Einstellungen</a> | <a href="/datetime-settings">Datum/Zeit</a> | <a href="/statistics">Statistik</a></p>
 </div>
 </body>
 </html>

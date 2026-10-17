@@ -107,11 +107,13 @@ class _FakeMonitoringSettings:
 
 
 class _FakeDateTimeSettings:
-    def __init__(self, culture='iso', utc_offset_minutes=0):
+    def __init__(self, culture='iso', utc_offset_minutes=0, eu_summer_time=False):
         self._culture = culture
         self._utc_offset_minutes = utc_offset_minutes
+        self._eu_summer_time = eu_summer_time
         self.saved_culture = None
         self.saved_utc_offset_minutes = None
+        self.saved_eu_summer_time = None
 
     def get_culture(self):
         return self._culture
@@ -119,11 +121,16 @@ class _FakeDateTimeSettings:
     def get_utc_offset_minutes(self):
         return self._utc_offset_minutes
 
-    def set(self, culture, utc_offset_minutes):
+    def get_eu_summer_time(self):
+        return self._eu_summer_time
+
+    def set(self, culture, utc_offset_minutes, eu_summer_time):
         self._culture = culture
         self._utc_offset_minutes = utc_offset_minutes
+        self._eu_summer_time = eu_summer_time
         self.saved_culture = culture
         self.saved_utc_offset_minutes = utc_offset_minutes
+        self.saved_eu_summer_time = eu_summer_time
 
 
 class _FakeLoggingSettings:
@@ -504,111 +511,6 @@ class LoggingSettingsOnSettingsPageTests(unittest.TestCase):
         self.assertIn("Fehler", response)
         self.assertIsNone(logging_settings.saved_enabled)
 
-    def test_get_settings_shows_culture_dropdown_with_current_selection(self):
-        datetime_settings = _FakeDateTimeSettings(culture='de_AT', utc_offset_minutes=60)
-        server = _new_server(datetime_settings=datetime_settings)
-        server._test_monitor = _fake_monitor()
-        try:
-            request = (
-                "GET /settings HTTP/1.1\r\nHost: localhost\r\n"
-                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
-            ).encode()
-            response = _request(server, request)
-        finally:
-            server._socket.close()
-
-        self.assertIn('name="culture"', response)
-        self.assertIn('<option value="de_AT" selected>', response)
-        self.assertIn('<option value="iso">', response)  # not selected
-        self.assertIn('name="utc_offset_minutes"', response)
-        self.assertIn('<option value="60" selected>', response)
-        self.assertIn('<option value="0">', response)  # not selected
-
-    def test_settings_page_without_datetime_settings_omits_culture_field(self):
-        """Backward compatible: callers that don't pass datetime_settings
-        must not break."""
-        server = _new_server(datetime_settings=None)
-        server._test_monitor = _fake_monitor()
-        try:
-            request = (
-                "GET /settings HTTP/1.1\r\nHost: localhost\r\n"
-                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
-            ).encode()
-            response = _request(server, request)
-        finally:
-            server._socket.close()
-
-        self.assertNotIn('name="culture"', response)
-        self.assertNotIn('name="utc_offset_minutes"', response)
-
-    def test_post_settings_saves_culture_and_timezone(self):
-        datetime_settings = _FakeDateTimeSettings(culture='iso', utc_offset_minutes=0)
-        server = _new_server(datetime_settings=datetime_settings)
-        server._test_monitor = _fake_monitor()
-        try:
-            body = b"name=Vorzimmer&culture=en_US&utc_offset_minutes=-480"
-            request = (
-                "POST /settings HTTP/1.1\r\nHost: localhost\r\n"
-                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n"
-                "Content-Type: application/x-www-form-urlencoded\r\n"
-                "Content-Length: " + str(len(body)) + "\r\n\r\n"
-            ).encode() + body
-            response = _request(server, request)
-        finally:
-            server._socket.close()
-
-        self.assertIn("200 OK", response)
-        self.assertIn("Gespeichert", response)
-        self.assertEqual(datetime_settings.saved_culture, 'en_US')
-        self.assertEqual(datetime_settings.saved_utc_offset_minutes, -480)
-
-    def test_post_settings_with_unknown_culture_saves_nothing(self):
-        """Atomic with the other /settings fields, and a defense against a
-        crafted request sending a culture value that was never offered in
-        the dropdown."""
-        settings = _FakeSettings("Vorzimmer")
-        datetime_settings = _FakeDateTimeSettings(culture='iso', utc_offset_minutes=0)
-        server = _new_server(settings=settings, datetime_settings=datetime_settings)
-        server._test_monitor = _fake_monitor(name="Vorzimmer")
-        try:
-            body = b"name=Wohnzimmer&culture=fr_FR&utc_offset_minutes=0"
-            request = (
-                "POST /settings HTTP/1.1\r\nHost: localhost\r\n"
-                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n"
-                "Content-Type: application/x-www-form-urlencoded\r\n"
-                "Content-Length: " + str(len(body)) + "\r\n\r\n"
-            ).encode() + body
-            response = _request(server, request)
-        finally:
-            server._socket.close()
-
-        self.assertIn("Fehler", response)
-        self.assertEqual(settings.get_name(), "Vorzimmer")  # unchanged
-        self.assertIsNone(datetime_settings.saved_culture)
-
-    def test_post_settings_with_unknown_utc_offset_saves_nothing(self):
-        """Defense against a crafted request sending an offset that was
-        never offered in the dropdown (e.g. a bogus 37-minute offset)."""
-        settings = _FakeSettings("Vorzimmer")
-        datetime_settings = _FakeDateTimeSettings(culture='iso', utc_offset_minutes=0)
-        server = _new_server(settings=settings, datetime_settings=datetime_settings)
-        server._test_monitor = _fake_monitor(name="Vorzimmer")
-        try:
-            body = b"name=Wohnzimmer&culture=iso&utc_offset_minutes=37"
-            request = (
-                "POST /settings HTTP/1.1\r\nHost: localhost\r\n"
-                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n"
-                "Content-Type: application/x-www-form-urlencoded\r\n"
-                "Content-Length: " + str(len(body)) + "\r\n\r\n"
-            ).encode() + body
-            response = _request(server, request)
-        finally:
-            server._socket.close()
-
-        self.assertIn("Fehler", response)
-        self.assertEqual(settings.get_name(), "Vorzimmer")  # unchanged
-        self.assertIsNone(datetime_settings.saved_utc_offset_minutes)
-
     def test_render_formats_last_measurement_using_configured_culture(self):
         datetime_settings = _FakeDateTimeSettings(culture='de_AT', utc_offset_minutes=0)
         server = _new_server(datetime_settings=datetime_settings)
@@ -639,6 +541,179 @@ class LoggingSettingsOnSettingsPageTests(unittest.TestCase):
             server._socket.close()
 
         self.assertIn("2026-10-17 06:05:09 UTC", html)
+
+
+class DateTimeSettingsPageTests(unittest.TestCase):
+    """/datetime-settings - split off from /settings so the biggest
+    single chunk of that page (culture + ~38 timezone options) doesn't
+    have to be part of every /settings render; see MemoryManagementTests
+    for why that mattered."""
+
+    def test_get_datetime_settings_shows_dropdowns_with_current_selection(self):
+        datetime_settings = _FakeDateTimeSettings(culture='de_AT', utc_offset_minutes=60, eu_summer_time=True)
+        server = _new_server(datetime_settings=datetime_settings)
+        server._test_monitor = _fake_monitor()
+        try:
+            request = (
+                "GET /datetime-settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
+            ).encode()
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn('name="culture"', response)
+        self.assertIn('<option value="de_AT" selected>', response)
+        self.assertIn('<option value="iso">', response)  # not selected
+        self.assertIn('name="utc_offset_minutes"', response)
+        self.assertIn('<option value="60" selected>', response)
+        self.assertIn('<option value="0">', response)  # not selected
+        self.assertIn('name="eu_summer_time"', response)
+        self.assertIn('name="eu_summer_time" value="1" checked', response)
+
+    def test_datetime_settings_page_without_datetime_settings_shows_not_configured(self):
+        """Backward compatible: callers that don't pass datetime_settings
+        must not break."""
+        server = _new_server(datetime_settings=None)
+        server._test_monitor = _fake_monitor()
+        try:
+            request = (
+                "GET /datetime-settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
+            ).encode()
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("200 OK", response)
+        self.assertNotIn('name="culture"', response)
+        self.assertNotIn('name="utc_offset_minutes"', response)
+        self.assertIn("Nicht konfiguriert", response)
+
+    def test_settings_page_no_longer_has_datetime_fields(self):
+        """Regression target for the page split: /settings must stay
+        small - culture/timezone/EU-summer-time belong on their own
+        page now."""
+        datetime_settings = _FakeDateTimeSettings(culture='de_AT', utc_offset_minutes=60, eu_summer_time=True)
+        server = _new_server(datetime_settings=datetime_settings)
+        server._test_monitor = _fake_monitor()
+        try:
+            request = (
+                "GET /settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
+            ).encode()
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertNotIn('name="culture"', response)
+        self.assertNotIn('name="utc_offset_minutes"', response)
+        self.assertNotIn('name="eu_summer_time"', response)
+        self.assertIn('href="/datetime-settings"', response)
+
+    def test_post_datetime_settings_saves_culture_timezone_and_eu_summer_time(self):
+        datetime_settings = _FakeDateTimeSettings(culture='iso', utc_offset_minutes=0, eu_summer_time=False)
+        server = _new_server(datetime_settings=datetime_settings)
+        server._test_monitor = _fake_monitor()
+        try:
+            body = b"culture=en_US&utc_offset_minutes=-480&eu_summer_time=1"
+            request = (
+                "POST /datetime-settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n"
+                "Content-Type: application/x-www-form-urlencoded\r\n"
+                "Content-Length: " + str(len(body)) + "\r\n\r\n"
+            ).encode() + body
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("200 OK", response)
+        self.assertIn("Gespeichert", response)
+        self.assertEqual(datetime_settings.saved_culture, 'en_US')
+        self.assertEqual(datetime_settings.saved_utc_offset_minutes, -480)
+        self.assertTrue(datetime_settings.saved_eu_summer_time)
+
+    def test_post_datetime_settings_without_eu_summer_time_checkbox_disables_it(self):
+        """A real browser omits an unchecked checkbox entirely from the
+        POST body - must be treated as False, not as a missing/invalid
+        field."""
+        datetime_settings = _FakeDateTimeSettings(culture='iso', utc_offset_minutes=0, eu_summer_time=True)
+        server = _new_server(datetime_settings=datetime_settings)
+        server._test_monitor = _fake_monitor()
+        try:
+            body = b"culture=de_AT&utc_offset_minutes=60"
+            request = (
+                "POST /datetime-settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n"
+                "Content-Type: application/x-www-form-urlencoded\r\n"
+                "Content-Length: " + str(len(body)) + "\r\n\r\n"
+            ).encode() + body
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("200 OK", response)
+        self.assertFalse(datetime_settings.saved_eu_summer_time)
+
+    def test_post_datetime_settings_with_unknown_culture_saves_nothing(self):
+        """Defense against a crafted request sending a culture value that
+        was never offered in the dropdown."""
+        datetime_settings = _FakeDateTimeSettings(culture='iso', utc_offset_minutes=0)
+        server = _new_server(datetime_settings=datetime_settings)
+        server._test_monitor = _fake_monitor()
+        try:
+            body = b"culture=fr_FR&utc_offset_minutes=0"
+            request = (
+                "POST /datetime-settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n"
+                "Content-Type: application/x-www-form-urlencoded\r\n"
+                "Content-Length: " + str(len(body)) + "\r\n\r\n"
+            ).encode() + body
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("Fehler", response)
+        self.assertIsNone(datetime_settings.saved_culture)
+
+    def test_post_datetime_settings_with_unknown_utc_offset_saves_nothing(self):
+        """Defense against a crafted request sending an offset that was
+        never offered in the dropdown (e.g. a bogus 37-minute offset)."""
+        datetime_settings = _FakeDateTimeSettings(culture='iso', utc_offset_minutes=0)
+        server = _new_server(datetime_settings=datetime_settings)
+        server._test_monitor = _fake_monitor()
+        try:
+            body = b"culture=iso&utc_offset_minutes=37"
+            request = (
+                "POST /datetime-settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n"
+                "Content-Type: application/x-www-form-urlencoded\r\n"
+                "Content-Length: " + str(len(body)) + "\r\n\r\n"
+            ).encode() + body
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("Fehler", response)
+        self.assertIsNone(datetime_settings.saved_utc_offset_minutes)
+
+    def test_post_datetime_settings_without_auth_does_not_save(self):
+        datetime_settings = _FakeDateTimeSettings(culture='iso', utc_offset_minutes=0)
+        server = _new_server(datetime_settings=datetime_settings)
+        server._test_monitor = _fake_monitor()
+        try:
+            body = b"culture=en_US&utc_offset_minutes=-480&eu_summer_time=1"
+            request = (
+                "POST /datetime-settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Content-Type: application/x-www-form-urlencoded\r\n"
+                "Content-Length: " + str(len(body)) + "\r\n\r\n"
+            ).encode() + body
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("401", response)
+        self.assertIsNone(datetime_settings.saved_culture)
 
 
 class WifiSettingsPageTests(unittest.TestCase):
@@ -1096,6 +1171,53 @@ class MemoryManagementTests(unittest.TestCase):
             server._socket.close()
 
         mock_collect.assert_called()
+
+    def test_memory_error_during_rendering_is_retried_once_after_gc_collect(self):
+        """Regression target: /settings kept growing (culture + timezone +
+        EU-summer-time fields) and the single gc.collect() at the top of
+        handle_requests() stopped being reliably enough, because the heap
+        keeps fragmenting *while* a page is built (e.g. iterating ~45
+        dropdown options). Rather than chase that with more and more
+        manually-placed collect() calls, a MemoryError during rendering is
+        now treated as transient and retried once after another
+        gc.collect() - this must turn a transient failure into a normal
+        200 response instead of an empty one."""
+        server = _new_server()
+        server._test_monitor = _fake_monitor()
+        try:
+            with patch("WebServer.webserver.status_page.render",
+                       side_effect=[MemoryError("simulated fragmentation"), "<html>ok</html>"]) as mock_render, \
+                 patch("WebServer.webserver.gc.collect") as mock_collect:
+                request = b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"
+                response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("200 OK", response)
+        self.assertIn("<html>ok</html>", response)
+        self.assertEqual(mock_render.call_count, 2)
+        self.assertEqual(mock_collect.call_count, 2)
+
+    def test_memory_error_on_both_attempts_does_not_crash_the_server(self):
+        """If even the retry fails, the connection must still be closed
+        cleanly (no response, same as any other unhandled exception) -
+        not leave the server stuck or the socket hanging."""
+        server = _new_server()
+        server._test_monitor = _fake_monitor()
+        try:
+            with patch("WebServer.webserver.status_page.render",
+                       side_effect=MemoryError("simulated fragmentation")):
+                request = b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"
+                response = _request(server, request)  # must not raise/hang
+
+            # server must still be alive and answer a normal follow-up request
+            request2 = b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"
+            response2 = _request(server, request2)
+        finally:
+            server._socket.close()
+
+        self.assertEqual(response, "")  # first request got no response at all
+        self.assertIn("200 OK", response2)
 
 
 if __name__ == "__main__":

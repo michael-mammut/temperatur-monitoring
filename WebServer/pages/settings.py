@@ -1,4 +1,3 @@
-from WebServer.datetimeformat import CULTURES, UTC_OFFSETS, VALID_OFFSET_MINUTES
 from WebServer.errorlog import ALL_CATEGORIES, CATEGORY_LABELS
 from WebServer.webstyle import STYLE
 
@@ -6,7 +5,6 @@ from WebServer.webstyle import STYLE
 def handle_post(server, monitor, body):
     name = server._parse_form_field(body, 'name')
     ram_value = storage_value = log_storage_value = None
-    culture = utc_offset_minutes = None
     error = None
 
     if server._monitoring_settings is not None:
@@ -17,15 +15,6 @@ def handle_post(server, monitor, body):
             server._parse_form_field(body, 'log_storage_percent'))
         error = ram_error or storage_error or log_storage_error
 
-    if not error and server._datetime_settings is not None:
-        culture = server._parse_form_field(body, 'culture')
-        try:
-            utc_offset_minutes = int(server._parse_form_field(body, 'utc_offset_minutes'))
-        except (TypeError, ValueError):
-            utc_offset_minutes = None
-        if culture not in CULTURES or utc_offset_minutes not in VALID_OFFSET_MINUTES:
-            error = 'Ungültiges Datum-/Zeit-Format oder Zeitzone.'
-
     if not error:
         if name and name.strip():
             name = name.strip()[:64]
@@ -33,8 +22,6 @@ def handle_post(server, monitor, body):
             monitor.telegram.set_project_name(name)
         if server._monitoring_settings is not None:
             server._monitoring_settings.set_thresholds(ram_value, storage_value, log_storage_value)
-        if server._datetime_settings is not None:
-            server._datetime_settings.set(culture, utc_offset_minutes)
         if server._logging_settings is not None:
             enabled_by_category = {
                 category: server._parse_form_field(body, 'log_' + category) is not None
@@ -72,27 +59,6 @@ def render(server, saved=False, error=None):
             min=MIN_WARNING_PERCENT, max=MAX_WARNING_PERCENT,
         )
 
-    datetime_fields = ''
-    if server._datetime_settings is not None:
-        current_culture = server._datetime_settings.get_culture()
-        culture_options = []
-        for code, label in CULTURES.items():
-            selected = ' selected' if code == current_culture else ''
-            culture_options.append('<option value="{0}"{1}>{2}</option>'.format(
-                code, selected, server._escape_html(label)))
-
-        current_offset = server._datetime_settings.get_utc_offset_minutes()
-        offset_options = []
-        for minutes, label in UTC_OFFSETS:
-            selected = ' selected' if minutes == current_offset else ''
-            offset_options.append('<option value="{0}"{1}>{2}</option>'.format(
-                minutes, selected, server._escape_html(label)))
-
-        datetime_fields = (
-            '<label>Datum-/Zeit-Format:\n<select name="culture">\n{culture_options}\n</select>\n</label>\n'
-            '<label>Zeitzone:\n<select name="utc_offset_minutes">\n{offset_options}\n</select>\n</label>\n'
-        ).format(culture_options='\n'.join(culture_options), offset_options='\n'.join(offset_options))
-
     logging_fields = ''
     if server._logging_settings is not None:
         checkboxes = []
@@ -117,13 +83,12 @@ def render(server, saved=False, error=None):
 <form method="POST" action="/settings">
 <label>Aquarium-Name: <input type="text" name="name" value="{name}" maxlength="64"></label>
 {monitoring_fields}
-{datetime_fields}
 {logging_fields}
 <button type="submit">Speichern</button>
 </form>
-<p class="nav"><a href="/">Status</a> | <a href="/wifi-settings">WLAN</a> | <a href="/statistics">Statistik</a></p>
+<p class="nav"><a href="/">Status</a> | <a href="/wifi-settings">WLAN</a> | <a href="/datetime-settings">Datum/Zeit</a> | <a href="/statistics">Statistik</a></p>
 </div>
 </body>
 </html>
 """.format(style=STYLE, message=message, name=name, monitoring_fields=monitoring_fields,
-           datetime_fields=datetime_fields, logging_fields=logging_fields)
+           logging_fields=logging_fields)

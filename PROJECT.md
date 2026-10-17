@@ -70,7 +70,15 @@ wählbar über `/settings` nach Country/Culture (z. B. `17.10.2026
 ein fester, ebenfalls über `/settings` wählbarer UTC-Offset statt einer
 echten Zeitzone — eine vollständige IANA-Zeitzonendatenbank mit
 Sommerzeit-Regeln je Land wäre für den ESP32-Flash zu groß und könnte
-auf dem Gerät ohnehin nicht aktuell gehalten werden. Dabei den großen
+auf dem Gerät ohnehin nicht aktuell gehalten werden. Dazu eine optionale
+automatische Sommerzeit-Umstellung nach der EU-Regel (letzter Sonntag im
+März/Oktober, 01:00 UTC) über eine Checkbox auf `/settings` — das Projekt
+ist damit vorerst bewusst auf Europa beschränkt, andere Regionen (USA,
+Südhalbkugel, ...) haben andere Umstellungstermine oder keine Sommerzeit
+und müssten ihren UTC-Offset bei Bedarf selbst zweimal im Jahr ändern.
+Die Berechnung (Wochentag der letzten Sonntage im März/Oktober) wurde
+gegen Pythons `zoneinfo`-Modul (Europe/Vienna) minutengenau über 20 Jahre
+verifiziert, ohne eine einzige Abweichung. Dabei den großen
 `WebServer/statusserver.py` (704 Zeilen, fünf verschiedene
 Zuständigkeiten in einer Klasse) in einen schlanken HTTP-Kern
 (`WebServer/webserver.py`, Klasse `WebServer`) plus ein Modul je Seite
@@ -81,7 +89,20 @@ Seite) schlug beim Speichern fehl, weil `main.py`s `gc.collect()` erst
 *nach* `handle_requests()` läuft und die Fragmentierung aus dem Rest
 des Loop-Durchlaufs (Sensoren, WLAN, Telegram) beim Bearbeiten der
 nächsten Anfrage noch da war — behoben durch einen zusätzlichen
-`gc.collect()`-Aufruf direkt am Anfang von `handle_requests()`.
+`gc.collect()`-Aufruf direkt am Anfang von `handle_requests()`. Als
+`/settings` durch die Sommerzeit-Checkbox noch einmal größer wurde, trat
+derselbe Fehler erneut auf (Fragmentierung entsteht auch *während* des
+Renderns, z. B. beim Aufbau der Dropdown-Optionen) — statt eines
+weiteren Einzel-Flickens jetzt eine generelle Selbstheilung:
+`_render_with_retry()` fängt einen `MemoryError` beim Rendern
+irgendeiner Seite ab, räumt noch einmal auf und versucht es exakt
+einmal erneut, bevor der Fehler durchschlägt. Ursächlicher angegangen,
+nachdem der Fehler trotzdem noch einmal auftrat: Datum-/Zeit-Format,
+Zeitzone und Sommerzeit-Checkbox wurden von `/settings` auf eine eigene
+Seite `/datetime-settings` ausgelagert — das Culture-/Zeitzonen-Dropdown
+allein hat ~45 Optionen und war mit Abstand der größte Einzel-Block;
+die Aufteilung senkt die größte benötigte zusammenhängende Allokation
+von ~9,7 KB auf ~5,8 KB.
 
 ## Wie KI in diesem Projekt eingesetzt wird
 
@@ -120,17 +141,17 @@ echte Hardware zu benötigen.
 | [test_wlanconnection.py](tests/test_wlanconnection.py) | 12 | WLAN-Verbindung, DHCP-Hostname, NTP-Zeitsync-Retry, Netzwerk-Scan (inkl. 30s-Cache), Signalstärke, Fehlerprotokollierung |
 | [test_settings.py](tests/test_settings.py) | 3 | Persistenz des Aquarium-Namens über Neustarts |
 | [test_wifisettings.py](tests/test_wifisettings.py) | 11 | Persistenz + Validierung der WLAN-Zugangsdaten (SSID-/Passwort-Längen nach 802.11/WPA2-Spezifikation) |
-| [test_webserver.py](tests/test_webserver.py) | 48 | HTTP-Server: Routing, HTTP-Basic-Auth, HTML-Escaping (XSS), Request-Size-Limit, Statistik-Seite (inkl. Zeilenbegrenzung gegen MemoryError), Warnschwellen-Formular, Protokollierungs-Checkboxen, Logs-löschen-Formular, Datum-/Zeit-Format- + Zeitzonen-Auswahl (inkl. Tagesgrenzen-Übertrag), `gc.collect()` vor jeder Anfrage, echte Socket-Kommunikation über Loopback |
+| [test_webserver.py](tests/test_webserver.py) | 53 | HTTP-Server: Routing, HTTP-Basic-Auth, HTML-Escaping (XSS), Request-Size-Limit, Statistik-Seite (inkl. Zeilenbegrenzung gegen MemoryError), Warnschwellen-Formular, Protokollierungs-Checkboxen, Logs-löschen-Formular, `/datetime-settings` (Datum-/Zeit-Format- + Zeitzonen- + EU-Sommerzeit-Auswahl, inkl. Tagesgrenzen-Übertrag, getrennt von `/settings`), `gc.collect()` + Retry-nach-`MemoryError` vor jeder Anfrage, echte Socket-Kommunikation über Loopback |
 | [test_eventlog.py](tests/test_eventlog.py) | 15 | Persistierter Event-Log: 30-Tage-Fenster, Begrenzung auf 200 Einträge, Dateigröße, Alters-basiertes Löschen, Speicher-Budget-Durchsetzung |
 | [test_errorlog.py](tests/test_errorlog.py) | 6 | Exception → Fehlerkategorie/-code/-meldung, Ein-/Ausschalten je Kategorie |
 | [test_loggingsettings.py](tests/test_loggingsettings.py) | 4 | Persistenz der Protokollierungs-Ein/Aus-Schalter je Kategorie |
 | [test_loginlog.py](tests/test_loginlog.py) | 3 | Login-Zeitpunkt-Persistenz, Rückgabe des *vorherigen* Logins |
 | [test_systemstats.py](tests/test_systemstats.py) | 2 | RAM-/Flash-Belegung (`used + free == total`) |
 | [test_monitoringsettings.py](tests/test_monitoringsettings.py) | 7 | Persistenz + Validierung der RAM-/Flash-/Log-Speicher-Warnschwellen (5–50 %) |
-| [test_datetimeformat.py](tests/test_datetimeformat.py) | 25 | Datums-/Zeit-Formatierung je Country/Culture (Tag/Monat-Reihenfolge, 12h-/24h-Anzeige inkl. Mitternacht/Mittag), Fallback auf ISO 8601 bei unbekannter Culture, UTC-Offset-Verschiebung inkl. Tages-/Monats-/Jahres-/Schaltjahr-Übertrag, Halb-/Viertelstunden-Offsets |
-| [test_datetimesettings.py](tests/test_datetimesettings.py) | 7 | Persistenz + Validierung der gewählten Culture und des UTC-Offsets, Fallback bei veralteter/ungültiger gespeicherter Culture bzw. Offset |
+| [test_datetimeformat.py](tests/test_datetimeformat.py) | 34 | Datums-/Zeit-Formatierung je Country/Culture (Tag/Monat-Reihenfolge, 12h-/24h-Anzeige inkl. Mitternacht/Mittag), Fallback auf ISO 8601 bei unbekannter Culture, UTC-Offset-Verschiebung inkl. Tages-/Monats-/Jahres-/Schaltjahr-Übertrag, Halb-/Viertelstunden-Offsets, EU-Sommerzeit-Umstellung (Übergangs-Instant auf die Sekunde, inkl. Schaltjahr) |
+| [test_datetimesettings.py](tests/test_datetimesettings.py) | 8 | Persistenz + Validierung der gewählten Culture, des UTC-Offsets und der EU-Sommerzeit-Checkbox, Fallback bei veralteter/ungültiger/fehlender gespeicherter Culture bzw. Offset bzw. Sommerzeit-Flag |
 
-**Gesamt: 177 Tests**, Stand des letzten vollständigen Durchlaufs in diesem
+**Gesamt: 192 Tests**, Stand des letzten vollständigen Durchlaufs in diesem
 Dokument. Viele Tests sind als Regressionstests für konkret auf der
 Hardware beobachtete Bugs angelegt (siehe Docstrings in den jeweiligen
 Testdateien) — sie beschreiben bewusst, *welches reale Problem* sie

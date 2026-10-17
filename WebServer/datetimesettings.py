@@ -6,16 +6,20 @@ from WebServer.datetimeformat import (
 
 _PATH = 'datetime_settings.json'
 
+DEFAULT_EU_SUMMER_TIME = False
+
 
 class DateTimeSettings:
-    """Persists the Country/Culture date & time display format and the
-    fixed UTC offset used throughout the web interface (/settings), so
-    both survive a reboot - exactly like the aquarium name or the
+    """Persists the Country/Culture date & time display format, the
+    fixed UTC offset, and whether the EU summer-time rule is applied on
+    top of it - all used throughout the web interface (/settings), so
+    they survive a reboot - exactly like the aquarium name or the
     warning thresholds."""
 
     def __init__(self):
         self._culture = DEFAULT_CULTURE
         self._utc_offset_minutes = DEFAULT_UTC_OFFSET_MINUTES
+        self._eu_summer_time = DEFAULT_EU_SUMMER_TIME
         try:
             with open(_PATH) as f:
                 data = ujson.load(f)
@@ -25,6 +29,7 @@ class DateTimeSettings:
             offset = data.get('utc_offset_minutes')
             if offset in VALID_OFFSET_MINUTES:
                 self._utc_offset_minutes = offset
+            self._eu_summer_time = bool(data.get('eu_summer_time', DEFAULT_EU_SUMMER_TIME))
         except (OSError, ValueError):
             pass  # no override file yet, keep the defaults
 
@@ -34,12 +39,20 @@ class DateTimeSettings:
     def get_utc_offset_minutes(self):
         return self._utc_offset_minutes
 
-    def set(self, culture, utc_offset_minutes):
+    def get_eu_summer_time(self):
+        return self._eu_summer_time
+
+    def set(self, culture, utc_offset_minutes, eu_summer_time):
         if culture not in CULTURES:
             raise ValueError("Unbekannte Culture: {}".format(culture))
         if utc_offset_minutes not in VALID_OFFSET_MINUTES:
             raise ValueError("Unbekannter UTC-Offset: {}".format(utc_offset_minutes))
         self._culture = culture
         self._utc_offset_minutes = utc_offset_minutes
+        self._eu_summer_time = bool(eu_summer_time)
         with open(_PATH, 'w') as f:
-            ujson.dump({'culture': self._culture, 'utc_offset_minutes': self._utc_offset_minutes}, f)
+            ujson.dump({
+                'culture': self._culture,
+                'utc_offset_minutes': self._utc_offset_minutes,
+                'eu_summer_time': self._eu_summer_time,
+            }, f)

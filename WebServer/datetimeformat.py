@@ -96,6 +96,34 @@ def _civil_from_days(z):
     return (year + (1 if month <= 2 else 0), month, day)
 
 
+def _weekday(days_since_epoch):
+    # 1970-01-01 (day 0) was a Thursday. Monday=0 .. Sunday=6.
+    return (days_since_epoch + 3) % 7
+
+
+def _last_sunday(year, month, last_day_of_month):
+    days = _days_from_civil(year, month, last_day_of_month)
+    return last_day_of_month - ((_weekday(days) - 6) % 7)
+
+
+def _eu_summer_time_active(time_tuple):
+    """Whether EU summer time (CEST-style, +1h over winter time) is in
+    effect at this UTC instant - from 01:00 UTC on the last Sunday of
+    March to 01:00 UTC on the last Sunday of October (EU directive
+    2000/84/EC). The whole EU switches at the same UTC instant regardless
+    of local offset, which is why this checks the *unshifted* UTC tuple,
+    not a locally-shifted one. Deliberately only the EU rule - this
+    device is scoped to Europe for now; other regions (US, Southern
+    Hemisphere, ...) use different transition dates or none at all."""
+    year, month, day, hour, minute, second = time_tuple[0:6]
+    now_seconds = _days_from_civil(year, month, day) * 86400 + hour * 3600 + minute * 60 + second
+    spring_day = _last_sunday(year, 3, 31)
+    autumn_day = _last_sunday(year, 10, 31)
+    spring_seconds = _days_from_civil(year, 3, spring_day) * 86400 + 1 * 3600
+    autumn_seconds = _days_from_civil(year, 10, autumn_day) * 86400 + 1 * 3600
+    return spring_seconds <= now_seconds < autumn_seconds
+
+
 def _apply_utc_offset(time_tuple, utc_offset_minutes):
     year, month, day, hour, minute, second = time_tuple[0:6]
     if not utc_offset_minutes:
@@ -118,14 +146,20 @@ def _offset_suffix(utc_offset_minutes):
     return "UTC{}{:02d}".format(sign, hours)
 
 
-def format_datetime(time_tuple, culture=DEFAULT_CULTURE, utc_offset_minutes=DEFAULT_UTC_OFFSET_MINUTES):
+def format_datetime(time_tuple, culture=DEFAULT_CULTURE, utc_offset_minutes=DEFAULT_UTC_OFFSET_MINUTES,
+                     eu_summer_time=False):
     """Formats a (year, month, day, hour, minute, second, ...) tuple -
     e.g. straight from time.gmtime(), which is always UTC on this device
-    - shifted by the given fixed UTC offset and written out in the
-    date/time convention of the given country/culture. Falls back to
-    ISO 8601 / UTC for an unknown culture/offset, so a stale/invalid
-    stored value never breaks rendering."""
-    year, month, day, hour, minute, second = _apply_utc_offset(time_tuple, utc_offset_minutes)
+    - shifted by the given fixed UTC offset (plus one more hour if
+    `eu_summer_time` is enabled and this instant falls within the EU's
+    summer-time window) and written out in the date/time convention of
+    the given country/culture. Falls back to ISO 8601 / UTC for an
+    unknown culture/offset, so a stale/invalid stored value never breaks
+    rendering."""
+    effective_offset = utc_offset_minutes
+    if eu_summer_time and _eu_summer_time_active(time_tuple):
+        effective_offset += 60
+    year, month, day, hour, minute, second = _apply_utc_offset(time_tuple, effective_offset)
 
     if culture in ('de_AT', 'de_DE'):
         date_part = "{:02d}.{:02d}.{:04d}".format(day, month, year)
@@ -148,4 +182,4 @@ def format_datetime(time_tuple, culture=DEFAULT_CULTURE, utc_offset_minutes=DEFA
         date_part = "{:04d}-{:02d}-{:02d}".format(year, month, day)
         time_part = "{:02d}:{:02d}:{:02d}".format(hour, minute, second)
 
-    return "{} {} {}".format(date_part, time_part, _offset_suffix(utc_offset_minutes))
+    return "{} {} {}".format(date_part, time_part, _offset_suffix(effective_offset))

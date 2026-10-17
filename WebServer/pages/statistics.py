@@ -89,7 +89,7 @@ def render(server, monitor, previous_login, message=None):
 <button type="submit">Löschen</button>
 </form>
 
-<p class="nav"><a href="/">Status</a> | <a href="/settings">Einstellungen</a> | <a href="/wifi-settings">WLAN</a></p>
+<p class="nav"><a href="/">Status</a> | <a href="/settings">Einstellungen</a> | <a href="/wifi-settings">WLAN</a> | <a href="/datetime-settings">Datum/Zeit</a></p>
 </div>
 </body>
 </html>
@@ -215,4 +215,5 @@ def _format_login_time(server, timestamp):
 def _format_epoch(server, timestamp):
     if timestamp is None:
         return "n/a"
-    return format_datetime(time.gmtime(int(timestamp)), server._current_culture(), server._current_utc_offset())
+    return format_datetime(time.gmtime(int(timestamp)), server._current_culture(), server._current_utc_offset(),
+                            server._current_eu_summer_time())

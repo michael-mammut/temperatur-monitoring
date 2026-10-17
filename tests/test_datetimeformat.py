@@ -109,6 +109,72 @@ class FormatDatetimeTests(unittest.TestCase):
     def test_valid_offset_minutes_matches_the_offered_offsets(self):
         self.assertEqual(VALID_OFFSET_MINUTES, tuple(minutes for minutes, _label in UTC_OFFSETS))
 
+    # -- EU summer time (DST) -----------------------------------------------
+    # Ground truth (independently verified with Python's stdlib datetime,
+    # not with this module's own calendar math): last Sunday of March /
+    # October, at 01:00 UTC, is when the whole EU switches at once.
+    #   2024: 2024-03-31 / 2024-10-27 (leap year)
+    #   2026: 2026-03-29 / 2026-10-25
+
+    def test_disabled_by_default_even_in_summer(self):
+        midsummer = (2026, 7, 1, 12, 0, 0)
+        self.assertEqual(format_datetime(midsummer, 'iso', 60), "2026-07-01 13:00:00 UTC+01")
+
+    def test_eu_summer_time_true_in_midsummer(self):
+        midsummer = (2026, 7, 1, 12, 0, 0)
+        self.assertEqual(format_datetime(midsummer, 'iso', 60, eu_summer_time=True),
+                          "2026-07-01 14:00:00 UTC+02")
+
+    def test_eu_summer_time_false_in_midwinter(self):
+        midwinter = (2026, 1, 1, 12, 0, 0)
+        self.assertEqual(format_datetime(midwinter, 'iso', 60, eu_summer_time=True),
+                          "2026-01-01 13:00:00 UTC+01")
+
+    def test_spring_transition_instant_2026(self):
+        just_before = (2026, 3, 29, 0, 59, 59)
+        at_transition = (2026, 3, 29, 1, 0, 0)
+        self.assertEqual(format_datetime(just_before, 'iso', 60, eu_summer_time=True),
+                          "2026-03-29 01:59:59 UTC+01")
+        self.assertEqual(format_datetime(at_transition, 'iso', 60, eu_summer_time=True),
+                          "2026-03-29 03:00:00 UTC+02")
+
+    def test_autumn_transition_instant_2026(self):
+        just_before = (2026, 10, 25, 0, 59, 59)
+        at_transition = (2026, 10, 25, 1, 0, 0)
+        self.assertEqual(format_datetime(just_before, 'iso', 60, eu_summer_time=True),
+                          "2026-10-25 02:59:59 UTC+02")
+        self.assertEqual(format_datetime(at_transition, 'iso', 60, eu_summer_time=True),
+                          "2026-10-25 02:00:00 UTC+01")
+
+    def test_spring_transition_instant_2024_leap_year(self):
+        just_before = (2024, 3, 31, 0, 59, 59)
+        at_transition = (2024, 3, 31, 1, 0, 0)
+        self.assertEqual(format_datetime(just_before, 'iso', 60, eu_summer_time=True),
+                          "2024-03-31 01:59:59 UTC+01")
+        self.assertEqual(format_datetime(at_transition, 'iso', 60, eu_summer_time=True),
+                          "2024-03-31 03:00:00 UTC+02")
+
+    def test_autumn_transition_instant_2024_leap_year(self):
+        just_before = (2024, 10, 27, 0, 59, 59)
+        at_transition = (2024, 10, 27, 1, 0, 0)
+        self.assertEqual(format_datetime(just_before, 'iso', 60, eu_summer_time=True),
+                          "2024-10-27 02:59:59 UTC+02")
+        self.assertEqual(format_datetime(at_transition, 'iso', 60, eu_summer_time=True),
+                          "2024-10-27 02:00:00 UTC+01")
+
+    def test_eu_summer_time_combines_with_day_rollover(self):
+        # 23:30 UTC + (60 base + 60 DST) = 2h -> rolls into the next day.
+        late_evening = (2026, 7, 1, 23, 30, 0)
+        self.assertEqual(format_datetime(late_evening, 'iso', 60, eu_summer_time=True),
+                          "2026-07-02 01:30:00 UTC+02")
+
+    def test_eu_summer_time_applies_regardless_of_base_offset(self):
+        # Athens (UTC+02:00 base) is also EU and in the same summer-time
+        # window, becoming UTC+03 in summer.
+        midsummer = (2026, 7, 1, 12, 0, 0)
+        self.assertEqual(format_datetime(midsummer, 'iso', 120, eu_summer_time=True),
+                          "2026-07-01 15:00:00 UTC+03")
+
 
 if __name__ == "__main__":
     unittest.main()

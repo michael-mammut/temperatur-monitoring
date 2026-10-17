@@ -202,7 +202,8 @@ sequenceDiagram
 | [GpioControl/LedControl.py](GpioControl/LedControl.py) | Status-/Fehler-LEDs blinken lassen |
 | [WebServer/webserver.py](WebServer/webserver.py) | HTTP-Server-Kern: Routing, HTTP-Basic-Auth, Request-Parsing - delegiert das Rendern/die Formularverarbeitung jeder Seite an `WebServer/pages/*.py` |
 | [WebServer/pages/status.py](WebServer/pages/status.py) | Status-Seite (`/`) |
-| [WebServer/pages/settings.py](WebServer/pages/settings.py) | Einstellungen (`/settings`) |
+| [WebServer/pages/settings.py](WebServer/pages/settings.py) | Einstellungen (`/settings`) - Name, Warnschwellen, Protokollierung |
+| [WebServer/pages/datetimesettings.py](WebServer/pages/datetimesettings.py) | Datum-/Zeit-Einstellungen (`/datetime-settings`) - Country/Culture, UTC-Offset, EU-Sommerzeit; eigene Seite statt Teil von `/settings`, siehe Speicher-Hinweis unten |
 | [WebServer/pages/wifisettings.py](WebServer/pages/wifisettings.py) | WLAN-Einstellungen (`/wifi-settings`) |
 | [WebServer/pages/statistics.py](WebServer/pages/statistics.py) | Statistik (`/statistics`) |
 | [WebServer/webstyle.py](WebServer/webstyle.py) | Gemeinsames CSS (hell/dunkel) für alle vier Seiten |
@@ -212,8 +213,8 @@ sequenceDiagram
 | [WebServer/errorlog.py](WebServer/errorlog.py) | Fehlerkategorien (System/Hardware/Netzwerk/Externe APIs) + Hilfsfunktion zum Mitschreiben einer Exception |
 | [WebServer/loggingsettings.py](WebServer/loggingsettings.py) | Persistiert, welche Fehlerkategorien überhaupt protokolliert werden (über `/settings` abschaltbar) |
 | [WebServer/loginlog.py](WebServer/loginlog.py) | Persistiert den Zeitpunkt des letzten erfolgreichen Logins |
-| [WebServer/datetimeformat.py](WebServer/datetimeformat.py) | Formatiert einen Zeitstempel als Country/Culture-abhängigen String, verschoben um einen festen UTC-Offset (z. B. `17.10.2026 07:05:09 UTC+01` für Österreich vs. `10/17/2026 06:05:09 AM UTC` für die USA) - zentral für alle Datums-/Zeit-Anzeigen, analog zu `format_bytes()` für Zahlenwerte. Die Offset-Verschiebung selbst rechnet in reiner Integer-Arithmetik (Tage/Monate/Jahre korrekt inkl. Schaltjahr), bewusst ohne `time.mktime()` - das behandelt das Tupel auf CPython als *lokale* Zeit (abhängig von der Host-Zeitzone) und hat auf MicroPython gar kein Zeitzonen-Konzept, beide Plattformen würden sich also unterscheiden |
-| [WebServer/datetimesettings.py](WebServer/datetimesettings.py) | Persistiert die gewählte Country/Culture + den UTC-Offset für die Datums-/Zeit-Anzeige (über `/settings` änderbar) |
+| [WebServer/datetimeformat.py](WebServer/datetimeformat.py) | Formatiert einen Zeitstempel als Country/Culture-abhängigen String, verschoben um einen festen UTC-Offset plus optional die EU-Sommerzeit (z. B. `17.10.2026 07:05:09 UTC+01` für Österreich im Winter, `UTC+02` im Sommer, vs. `10/17/2026 06:05:09 AM UTC` für die USA) - zentral für alle Datums-/Zeit-Anzeigen, analog zu `format_bytes()` für Zahlenwerte. Die Offset-Verschiebung selbst rechnet in reiner Integer-Arithmetik (Tage/Monate/Jahre korrekt inkl. Schaltjahr), bewusst ohne `time.mktime()` - das behandelt das Tupel auf CPython als *lokale* Zeit (abhängig von der Host-Zeitzone) und hat auf MicroPython gar kein Zeitzonen-Konzept, beide Plattformen würden sich also unterscheiden. Die EU-Sommerzeit-Berechnung (letzter Sonntag im März/Oktober, 01:00 UTC) wurde gegen Pythons `zoneinfo` (Europe/Vienna) minutengenau über 20 Jahre verifiziert (0 Abweichungen) |
+| [WebServer/datetimesettings.py](WebServer/datetimesettings.py) | Persistiert die gewählte Country/Culture, den UTC-Offset und ob die automatische EU-Sommerzeit aktiv ist, für die Datums-/Zeit-Anzeige (über `/settings` änderbar) |
 | [WebServer/systemstats.py](WebServer/systemstats.py) | RAM- und Flash-Belegung (`gc`, `os.statvfs`) |
 | [Monitoring/settings.py](Monitoring/settings.py) | Persistiert die RAM-/Flash-Warnschwellen und den Log-Speicher-Deckel, die über `/settings` geändert wurden |
 | `*/config.py` | Je Modul eigene Konfiguration (siehe unten) |
@@ -320,13 +321,18 @@ Keine Secrets, daher regulär in Git. Werte sind auch über `/settings` zur Lauf
 | URL | Zugriff | Zweck |
 |---|---|---|
 | `http://<IP>/` | öffentlich | Temperaturen, Online-Status, Zeitstempel der letzten Messung |
-| `http://<IP>/settings` | Admin-Passwort | Aquarium-Namen ändern, RAM-/Flash-/Log-Speicher-Warnschwellen anpassen, Datum-/Zeit-Anzeigeformat (Country/Culture) + Zeitzone (fester UTC-Offset) wählen, Fehlerprotokollierung je Kategorie ein-/ausschalten |
+| `http://<IP>/settings` | Admin-Passwort | Aquarium-Namen ändern, RAM-/Flash-/Log-Speicher-Warnschwellen anpassen, Fehlerprotokollierung je Kategorie ein-/ausschalten |
+| `http://<IP>/datetime-settings` | Admin-Passwort | Datum-/Zeit-Anzeigeformat (Country/Culture) + Zeitzone (fester UTC-Offset) + automatische EU-Sommerzeit wählen — eigene Seite, damit die größte einzelne Formular-Sektion (Culture- + Zeitzonen-Dropdown, ~45 Optionen) nicht Teil von `/settings` sein muss (siehe Speicher-Hinweis unten) |
 | `http://<IP>/wifi-settings` | Admin-Passwort | WLAN-Netzwerk per Dropdown wählen + neues Passwort setzen; speichert und startet das Gerät neu |
 | `http://<IP>/statistics` | Admin-Passwort | RAM-/Flash-Belegung (inkl. Log-Speicherverbrauch gegen den konfigurierten, vom verfügbaren Speicher abhängigen Deckel), letzter Login, WLAN-Signalstärke, Anzahl gesendeter Benachrichtigungen (30 Tage), Fehler-Diagramm + -Tabelle (30 Tage, nach System/Hardware/Netzwerk/Externe APIs, max. die letzten 20 Zeilen), Formular zum manuellen Löschen von Log-Einträgen älter als X Minuten. Aktualisiert sich automatisch alle 30 s. |
 
 `/` aktualisiert sich ebenfalls automatisch alle 30 s; `/settings` und `/wifi-settings` nicht.
 
-> **Zeitzone ist ein fester UTC-Offset, keine echte Zeitzone.** Der ESP32 hat weder genug Flash für eine vollständige IANA-Zeitzonendatenbank (Sommerzeit-Regeln je Land, mehrere hundert KB) noch einen Mechanismus, um solche Regeln aktuell zu halten. Der Offset wird deshalb per `/settings` manuell gewählt (z. B. "UTC+01:00 (Wien, Berlin, Paris, Rom)") und bleibt fix — bei Sommer-/Winterzeit-Umstellung muss er von Hand angepasst werden, genau wie bei anderen kleinen IoT-Geräten (Shelly, Tasmota) ohne eigene Zeitzonen-Datenbank.
+> **Zeitzone ist ein fester UTC-Offset, keine echte Zeitzone.** Der ESP32 hat weder genug Flash für eine vollständige IANA-Zeitzonendatenbank (Sommerzeit-Regeln je Land, mehrere hundert KB) noch einen Mechanismus, um solche Regeln aktuell zu halten. Der Offset wird deshalb per `/datetime-settings` manuell gewählt (z. B. "UTC+01:00 (Wien, Berlin, Paris, Rom)"), genau wie bei anderen kleinen IoT-Geräten (Shelly, Tasmota) ohne eigene Zeitzonen-Datenbank.
+>
+> **Automatische Sommerzeit gibt es nur nach der EU-Regel** (letzter Sonntag im März/Oktober, Umstellung um 01:00 UTC — EU-Richtlinie 2000/84/EG), über eine eigene Checkbox auf `/datetime-settings` aktivierbar. Das Projekt ist damit vorerst bewusst auf Europa ausgelegt: Andere Regionen haben andere Umstellungstermine (USA/Kanada: zweiter Sonntag März / erster Sonntag November) oder gar keine Sommerzeit — wer außerhalb Europas ist, lässt die Checkbox einfach aus und stellt den UTC-Offset bei Bedarf selbst zweimal im Jahr um.
+>
+> **Warum eine eigene Seite statt ein paar Felder auf `/settings`:** Die Culture- + Zeitzonen-Dropdowns allein sind ~45 Optionen — mit Abstand der größte einzelne Formular-Block im ganzen Web-Interface. Solange das Teil von `/settings` war, führte das wiederholt zu `MemoryError` beim Speichern (Heap-Fragmentierung auf dem ESP32, siehe SECURITY.md). Eine eigene, kleinere Seite senkt die größte benötigte zusammenhängende Speicher-Allokation spürbar (gemessen: von ~9,7 KB auf ~5,8 KB für die größere der beiden Seiten) statt das Problem nur mit einem Retry-Mechanismus zu kaschieren.
 
 Details zur Absicherung (Zugriffsschutz, Eingabevalidierung, bekannte Grenzen) stehen in [SECURITY.md](SECURITY.md).
 
