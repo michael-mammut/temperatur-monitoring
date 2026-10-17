@@ -12,6 +12,9 @@ from Temperature.temperature import Temperature
 from WlanNetwork.wlanconnection import WlanConnection
 from WlanNetwork import config as wlan_config
 from Airpump import config as air_pump_config
+from WebServer.statusserver import StatusServer
+from WebServer.settings import Settings
+from WebServer import config as webserver_config
 import config as project_config
 
 WATCHDOG_TIMEOUT_MS = 15000
@@ -25,13 +28,17 @@ class AquariumMonitor:
         self.pin_K1_12_volt_wlan = ActorControl(actor_config.ACTOR_GPIO_WLAN)
 
         self.wlan = WlanConnection(wlan_config.SSID, wlan_config.PASSWORD, wlan_config.DHCP_HOSTNAME)
-        self.telegram = Telegram(project_config.AQUARIUM_NAME)
+        self.settings = Settings(project_config.AQUARIUM_NAME)
+        self.telegram = Telegram(self.settings.get_name())
         self.ambient_sensor = Temperature(temperature_config.ONE_WIRE_GPIO_AMBIENT)
         self.water_sensor = Temperature(temperature_config.ONE_WIRE_GPIO_WATER)
 
         self.air_pump_state = False
         self.first_run = True
         self.message_send_counter = 0
+        self.last_water_temperature = None
+        self.last_ambient_temperature = None
+        self.last_measurement_time = None
 
     def run_iteration(self):
         if self.wlan.isConnected() == False:
@@ -40,11 +47,16 @@ class AquariumMonitor:
             if self.wlan.connect() == True:
                 print("Main-Script is now online")
                 self.pin_K1_12_volt_wlan.off()
+        else:
+            self.wlan.ensure_time_synced()
 
         hour = time.gmtime()[3]
 
         ambient_temperature = self.ambient_sensor.readCurrentAverage()
         water_temperature = self.water_sensor.readCurrentAverage()
+        self.last_ambient_temperature = ambient_temperature
+        self.last_water_temperature = water_temperature
+        self.last_measurement_time = time.gmtime()
 
         if hour == air_pump_config.AIR_PUMP_ON and self.air_pump_state == False:
             self.pin_K3_5_volt_air_pump.off()
@@ -71,6 +83,7 @@ def main():
     print("+++++ START ++++++")
     monitor = AquariumMonitor()
     wdt = WDT(timeout=WATCHDOG_TIMEOUT_MS)
+    web_server = StatusServer(webserver_config.PORT, monitor.settings)
     print("----- LOOP START ------")
     while True:
         try:
@@ -78,6 +91,10 @@ def main():
         except Exception as exc:
             print("Loop iteration failed:", exc)
             led_error_twinkle(22, 23, 150, 3)
+        try:
+            web_server.handle_requests(monitor)
+        except Exception as exc:
+            print("Web server failed:", exc)
         wdt.feed()
         time.sleep_ms(3000)
         gc.collect()

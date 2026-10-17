@@ -12,6 +12,9 @@ class Telegram:
         self._morning_message = morning_hour_message
         self._afternoon_message = afternoon_hour_message
 
+    def set_project_name(self, project_name):
+        self._project_name = project_name
+
     def notify(self, message):
         if message == None:
             message = "-- no message --"

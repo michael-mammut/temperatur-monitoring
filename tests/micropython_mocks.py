@@ -85,7 +85,13 @@ def install():
     # \uXXXX (unlike CPython's json.dumps default ensure_ascii=True) - it
     # passes them through raw. Match that so UTF-8 byte-length bugs show up
     # under test the same way they did on real hardware.
-    _install_module("ujson", dumps=lambda obj: json.dumps(obj, ensure_ascii=False), loads=json.loads)
+    _install_module(
+        "ujson",
+        dumps=lambda obj: json.dumps(obj, ensure_ascii=False),
+        loads=json.loads,
+        dump=lambda obj, f: json.dump(obj, f, ensure_ascii=False),
+        load=json.load,
+    )
 
     # MicroPython's time module has extra functions CPython's doesn't.
     if not hasattr(time, "sleep_ms"):

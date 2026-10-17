@@ -11,8 +11,6 @@ class WlanConnection:
 
     def isConnected(self):
         wlan = WLAN(STA_IF)
-        #wlan.config(dhcp_hostname=self.__hostname)
-        #print('Connected with DHCP-Hostname: ' + wlan.config('dhcp_hostname') + ' - connection state:' + str(wlan.isconnected()))
         return wlan.isconnected()
 
     def connect(self):
@@ -23,8 +21,12 @@ class WlanConnection:
         print("Start with connection")
         wlan = WLAN(STA_IF)
         print(self.__hostname)
-        #wlan.config(dhcp_hostname="asdf")
         wlan.active(True)
+        # Must be set after active(True) but before connect(), otherwise the
+        # DHCP request goes out before the hostname is applied and the
+        # router never learns it - which is exactly why this was previously
+        # unreachable by name, not just by luck.
+        wlan.config(dhcp_hostname=self.__hostname)
         try:
             wlan.connect(self.__ssid, self.__key)
         except:
@@ -43,13 +45,28 @@ class WlanConnection:
                 break
 
         if self.isConnected() == True:
-            ntptime.settime()
-            print("Local time after synchronization： %s " % str(time.gmtime()))
+            self.ensure_time_synced()
         else:
             led_twinkle(23, 200)
             led_twinkle(23, 200)
             led_twinkle(23, 200)
 
         return self.isConnected()
+
+    def ensure_time_synced(self):
+        # The ESP32's RTC defaults to the year 2000 until NTP sets it. A
+        # single failed attempt (e.g. a transient network hiccup right
+        # after connecting) used to leave the clock wrong for the rest of
+        # the boot session, since this was only ever called once from
+        # connect() - and connect() is skipped entirely once isConnected()
+        # is already True. Checking the year lets every iteration retry
+        # until it actually succeeds.
+        if time.gmtime()[0] >= 2020:
+            return
+        try:
+            ntptime.settime()
+            print("Local time after synchronization： %s " % str(time.gmtime()))
+        except Exception as exc:
+            print("NTP sync failed:", exc)
 
         

@@ -22,6 +22,7 @@ def _patch_hardware():
         patch("main.Temperature", side_effect=lambda gpio: MagicMock(readCurrentAverage=MagicMock(return_value=21.5))),
         patch("main.led_twinkle"),
         patch("main.led_error_twinkle"),
+        patch("main.StatusServer", return_value=MagicMock(handle_requests=MagicMock())),
     ]
 
 
@@ -56,6 +57,21 @@ class AquariumMonitorTests(unittest.TestCase):
 
         monitor.telegram.send_aquarium_notification.assert_called_once()
 
+    def test_time_sync_is_retried_every_iteration_while_already_connected(self):
+        """Regression test: ensure_time_synced() must be invoked from the
+        loop itself (not just from connect()), otherwise a one-off NTP
+        failure right after connecting left the clock wrong forever."""
+        patches = _patch_hardware()
+        for p in patches:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in patches])
+
+        monitor = main.AquariumMonitor()
+        for _ in range(3):
+            monitor.run_iteration()
+
+        self.assertEqual(monitor.wlan.ensure_time_synced.call_count, 3)
+
 
 class MainLoopWatchdogTests(unittest.TestCase):
     """Regression tests for the missing watchdog: without WDT.feed(), any
@@ -85,6 +101,24 @@ class MainLoopWatchdogTests(unittest.TestCase):
 
         self.assertEqual(len(wdt_instances), 1)
         self.assertEqual(wdt_instances[0].feed_count, 3)
+
+    def test_web_server_is_served_every_iteration(self):
+        patches = _patch_hardware()
+        for p in patches:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in patches])
+
+        class StopLoop(Exception):
+            pass
+
+        with patch("main.WDT", side_effect=micropython_mocks.FakeWDT), \
+             patch("main.time.sleep_ms", side_effect=[None, None, StopLoop]), \
+             patch("main.gc.collect"):
+            with self.assertRaises(StopLoop):
+                main.main()
+
+        web_server = main.StatusServer.return_value
+        self.assertEqual(web_server.handle_requests.call_count, 3)
 
     def test_iteration_exception_does_not_stop_the_loop_and_watchdog_is_still_fed(self):
         """A single failing iteration (e.g. a sensor glitch) must not kill
