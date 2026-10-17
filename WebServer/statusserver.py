@@ -2,21 +2,37 @@ import socket
 import time
 import ubinascii
 
+from WebServer.errorlog import CATEGORY_EXTERNAL_API, CATEGORY_HARDWARE, CATEGORY_NETWORK, CATEGORY_SYSTEM, CATEGORY_LABELS
+from WebServer.systemstats import format_bytes, get_memory_stats, get_storage_stats
+
 # Hard cap on how much of a request we ever read into memory. This alone
 # defends against a memory-exhaustion DoS from a huge/lying Content-Length -
 # no matter what a client claims, we never allocate more than this many
 # bytes for a request, so the rest is simply never read.
 _MAX_REQUEST_BYTES = 2048
 
-_PROTECTED_PATHS = ('/settings', '/wifi-settings')
+_THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60
+
+_PROTECTED_PATHS = ('/settings', '/wifi-settings', '/statistics')
+
+_CHART_CATEGORIES = (CATEGORY_SYSTEM, CATEGORY_HARDWARE, CATEGORY_NETWORK, CATEGORY_EXTERNAL_API)
+
+# Rendering more rows than this in one go risks a MemoryError from heap
+# fragmentation on the ESP32 (see _render_error_table).
+_MAX_DISPLAYED_ERRORS = 20
 
 
 class StatusServer:
-    def __init__(self, port, settings, wifi_settings, admin_password, reset_callback):
+    def __init__(self, port, settings, wifi_settings, admin_password, reset_callback,
+                 error_log=None, notification_log=None, login_log=None, monitoring_settings=None):
         self._settings = settings
         self._wifi_settings = wifi_settings
         self._admin_password = admin_password
         self._reset_callback = reset_callback
+        self._error_log = error_log
+        self._notification_log = notification_log
+        self._login_log = login_log
+        self._monitoring_settings = monitoring_settings
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._socket.bind(('0.0.0.0', port))
@@ -37,14 +53,21 @@ class StatusServer:
             if path in _PROTECTED_PATHS and not self._is_authorized(headers):
                 response = self._unauthorized_response()
             elif path == '/settings' and method == 'POST':
+                self._record_login()
                 response = self._html_response(self._handle_settings_post(monitor, body))
             elif path == '/settings':
+                self._record_login()
                 response = self._html_response(self.render_settings())
             elif path == '/wifi-settings' and method == 'POST':
+                self._record_login()
                 html, should_reset = self._handle_wifi_settings_post(monitor, body)
                 response = self._html_response(html)
             elif path == '/wifi-settings':
+                self._record_login()
                 response = self._html_response(self.render_wifi_settings(monitor))
+            elif path == '/statistics':
+                previous_login = self._record_login()
+                response = self._html_response(self.render_statistics(monitor, previous_login))
             else:
                 response = self._html_response(self.render(monitor))
 
@@ -65,11 +88,24 @@ class StatusServer:
 
     def _handle_settings_post(self, monitor, body):
         name = self._parse_form_field(body, 'name')
-        if name and name.strip():
-            name = name.strip()[:64]
-            self._settings.set_name(name)
-            monitor.telegram.set_project_name(name)
-        return self.render_settings(saved=True)
+        ram_value = storage_value = None
+        error = None
+
+        if self._monitoring_settings is not None:
+            from Monitoring.settings import validate_percent
+            ram_error, ram_value = validate_percent(self._parse_form_field(body, 'ram_percent'))
+            storage_error, storage_value = validate_percent(self._parse_form_field(body, 'storage_percent'))
+            error = ram_error or storage_error
+
+        if not error:
+            if name and name.strip():
+                name = name.strip()[:64]
+                self._settings.set_name(name)
+                monitor.telegram.set_project_name(name)
+            if self._monitoring_settings is not None:
+                self._monitoring_settings.set_thresholds(ram_value, storage_value)
+
+        return self.render_settings(saved=(error is None), error=error)
 
     def _handle_wifi_settings_post(self, monitor, body):
         from WlanNetwork.wifisettings import validate_ssid, validate_password
@@ -104,7 +140,7 @@ class StatusServer:
 <p>Wassertemperatur: {water} &deg;C</p>
 <p>Umgebungstemperatur: {ambient} &deg;C</p>
 <p>Letzte Messung: {updated}</p>
-<p><a href="/settings">Einstellungen</a> | <a href="/wifi-settings">WLAN</a></p>
+<p><a href="/settings">Einstellungen</a> | <a href="/wifi-settings">WLAN</a> | <a href="/statistics">Statistik</a></p>
 </body>
 </html>
 """.format(
@@ -114,9 +150,29 @@ class StatusServer:
             updated=self._format_time(monitor.last_measurement_time),
         )
 
-    def render_settings(self, saved=False):
+    def render_settings(self, saved=False, error=None):
         name = self._escape_html(self._settings.get_name())
-        message = '<p>Gespeichert.</p>' if saved else ''
+        if error:
+            message = '<p>Fehler: {}</p>'.format(self._escape_html(error))
+        elif saved:
+            message = '<p>Gespeichert.</p>'
+        else:
+            message = ''
+
+        monitoring_fields = ''
+        if self._monitoring_settings is not None:
+            from Monitoring.settings import MAX_WARNING_PERCENT, MIN_WARNING_PERCENT
+            monitoring_fields = (
+                '<label>RAM-Warnschwelle (% frei): '
+                '<input type="number" name="ram_percent" value="{ram}" min="{min}" max="{max}"></label><br>\n'
+                '<label>Flash-Warnschwelle (% frei): '
+                '<input type="number" name="storage_percent" value="{storage}" min="{min}" max="{max}"></label><br>\n'
+            ).format(
+                ram=self._monitoring_settings.get_ram_percent(),
+                storage=self._monitoring_settings.get_storage_percent(),
+                min=MIN_WARNING_PERCENT, max=MAX_WARNING_PERCENT,
+            )
+
         return """<!DOCTYPE html>
 <html>
 <head>
@@ -127,13 +183,14 @@ class StatusServer:
 <h1>Einstellungen</h1>
 {message}
 <form method="POST" action="/settings">
-<label>Aquarium-Name: <input type="text" name="name" value="{name}" maxlength="64"></label>
+<label>Aquarium-Name: <input type="text" name="name" value="{name}" maxlength="64"></label><br>
+{monitoring_fields}
 <button type="submit">Speichern</button>
 </form>
-<p><a href="/">Zur Status-Seite</a></p>
+<p><a href="/">Status</a> | <a href="/wifi-settings">WLAN</a> | <a href="/statistics">Statistik</a></p>
 </body>
 </html>
-""".format(message=message, name=name)
+""".format(message=message, name=name, monitoring_fields=monitoring_fields)
 
     def render_wifi_settings(self, monitor, saved=False, error=None, ssid=None):
         current_ssid = self._escape_html(self._wifi_settings.get_ssid())
@@ -164,10 +221,160 @@ class StatusServer:
 <label>Passwort: <input type="password" name="password" maxlength="63" autocomplete="new-password"></label>
 <button type="submit">Verbinden</button>
 </form>
-<p><a href="/">Zur Status-Seite</a></p>
+<p><a href="/">Status</a> | <a href="/settings">Einstellungen</a> | <a href="/statistics">Statistik</a></p>
 </body>
 </html>
 """.format(current_ssid=current_ssid, options=options, message=message)
+
+    def render_statistics(self, monitor, previous_login):
+        memory = get_memory_stats()
+        try:
+            storage = get_storage_stats()
+        except Exception:
+            storage = None
+        rssi = monitor.wlan.get_rssi() if hasattr(monitor.wlan, 'get_rssi') else None
+        notification_count = (
+            self._notification_log.count_within(_THIRTY_DAYS_SECONDS)
+            if self._notification_log is not None else 0
+        )
+        counts_by_category = self._error_counts_by_category()
+        chart = self._render_error_chart(counts_by_category)
+        error_rows = self._render_error_table()
+
+        return """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="30">
+<title>Statistik</title>
+</head>
+<body>
+<h1>Statistik</h1>
+
+<h2>Speicher (RAM)</h2>
+<p>Belegt: {mem_used} &mdash; Frei: {mem_free} &mdash; Gesamt: {mem_total}</p>
+
+<h2>Speicher (Flash)</h2>
+<p>{storage}</p>
+
+<h2>Zugriff</h2>
+<p>Letzter Login: {last_login}</p>
+<p>WLAN-Signalstärke: {rssi}</p>
+
+<h2>Benachrichtigungen</h2>
+<p>Gesendet in den letzten 30 Tagen: {notification_count}</p>
+
+<h2>Fehler der letzten 30 Tage</h2>
+{chart}
+<table border="1" cellpadding="4">
+<tr><th>Zeitpunkt (UTC)</th><th>Kategorie</th><th>Fehlercode</th><th>Fehlermeldung</th></tr>
+{error_rows}
+</table>
+
+<p><a href="/">Status</a> | <a href="/settings">Einstellungen</a> | <a href="/wifi-settings">WLAN</a></p>
+</body>
+</html>
+""".format(
+            mem_used=format_bytes(memory['used']),
+            mem_free=format_bytes(memory['free']),
+            mem_total=format_bytes(memory['total']),
+            storage=self._format_storage(storage),
+            last_login=self._format_login_time(previous_login),
+            rssi=self._format_rssi(rssi),
+            notification_count=notification_count,
+            chart=chart,
+            error_rows=error_rows,
+        )
+
+    def _error_counts_by_category(self):
+        counts = {}
+        if self._error_log is None:
+            return counts
+        for entry in self._error_log.entries_within(_THIRTY_DAYS_SECONDS):
+            category = entry.get('category', CATEGORY_SYSTEM)
+            counts[category] = counts.get(category, 0) + 1
+        return counts
+
+    def _render_error_table(self):
+        if self._error_log is None:
+            return '<tr><td colspan="4">Keine Daten</td></tr>'
+        entries = self._error_log.entries_within(_THIRTY_DAYS_SECONDS)
+        if not entries:
+            return '<tr><td colspan="4">Keine Fehler in den letzten 30 Tagen</td></tr>'
+
+        total = len(entries)
+        # Building one big string for every entry (up to 200) needs a single
+        # large contiguous allocation, which fails with a MemoryError on the
+        # ESP32's fragmented heap even when the *total* free memory would be
+        # enough. Capping how many rows get rendered keeps the join small.
+        shown = entries[-_MAX_DISPLAYED_ERRORS:]
+        rows = []
+        for entry in reversed(shown):  # newest first
+            timestamp = self._format_epoch(entry.get('timestamp'))
+            category = self._escape_html(CATEGORY_LABELS.get(entry.get('category'), entry.get('category', '')))
+            code = self._escape_html(str(entry.get('code', '')))
+            message = self._escape_html(str(entry.get('message', '')))
+            rows.append(
+                '<tr><td>{ts}</td><td>{cat}</td><td>{code}</td><td>{msg}</td></tr>'.format(
+                    ts=timestamp, cat=category, code=code, msg=message))
+        if total > len(shown):
+            rows.append(
+                '<tr><td colspan="4">… zeigt die letzten {} von {} Fehlern</td></tr>'.format(len(shown), total))
+        return '\n'.join(rows)
+
+    def _render_error_chart(self, counts):
+        bar_width = 50
+        gap = 20
+        chart_height = 100
+        max_count = max([counts.get(c, 0) for c in _CHART_CATEGORIES] + [1])
+        bars = []
+        for i, category in enumerate(_CHART_CATEGORIES):
+            count = counts.get(category, 0)
+            height = int((count / max_count) * chart_height)
+            x = gap + i * (bar_width + gap)
+            y = chart_height - height
+            bars.append(
+                '<rect x="{x}" y="{y}" width="{w}" height="{h}" fill="#c0392b"/>'
+                '<text x="{tx}" y="{count_y}" font-size="12" text-anchor="middle">{count}</text>'
+                '<text x="{tx}" y="{label_y}" font-size="11" text-anchor="middle">{label}</text>'.format(
+                    x=x, y=y, w=bar_width, h=height,
+                    tx=x + bar_width / 2,
+                    count_y=(y - 5) if height > 0 else (chart_height - 5),
+                    count=count,
+                    label_y=chart_height + 15,
+                    label=self._escape_html(CATEGORY_LABELS[category]),
+                )
+            )
+        svg_width = gap + len(_CHART_CATEGORIES) * (bar_width + gap)
+        return '<svg width="{w}" height="140" xmlns="http://www.w3.org/2000/svg">{bars}</svg>'.format(
+            w=svg_width, bars=''.join(bars))
+
+    def _format_storage(self, storage):
+        if storage is None:
+            return "nicht verfügbar"
+        return "Belegt: {} &mdash; Frei: {} &mdash; Gesamt: {}".format(
+            format_bytes(storage['used']), format_bytes(storage['free']), format_bytes(storage['total']))
+
+    def _format_rssi(self, rssi):
+        if rssi is None:
+            return "nicht verfügbar"
+        return "{} dBm".format(rssi)
+
+    def _format_login_time(self, timestamp):
+        if timestamp is None:
+            return "noch nie"
+        return self._format_epoch(timestamp)
+
+    def _format_epoch(self, timestamp):
+        if timestamp is None:
+            return "n/a"
+        year, month, day, hour, minute, second = time.gmtime(int(timestamp))[0:6]
+        return "{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}".format(year, month, day, hour, minute, second)
+
+    def _record_login(self):
+        if self._login_log is None:
+            return None
+        return self._login_log.record_login()
 
     def _render_network_options(self, monitor, selected=None):
         try:

@@ -1,7 +1,7 @@
 import os
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -68,6 +68,23 @@ class ScanNetworksTests(unittest.TestCase):
         self.assertEqual(wlan_cls.return_value.scan.call_count, 2)
 
 
+class GetRssiTests(unittest.TestCase):
+    def test_returns_rssi_from_wlan_status(self):
+        with patch("WlanNetwork.wlanconnection.WLAN") as wlan_cls:
+            wlan_cls.return_value.status.return_value = -55
+            wlan = WlanConnection("ssid", "key", "host")
+            self.assertEqual(wlan.get_rssi(), -55)
+
+    def test_returns_none_and_records_error_on_failure(self):
+        fake_log = MagicMock()
+        with patch("WlanNetwork.wlanconnection.WLAN") as wlan_cls:
+            wlan_cls.return_value.status.side_effect = OSError("Wifi Internal Error")
+            wlan = WlanConnection("ssid", "key", "host", error_log=fake_log)
+            self.assertIsNone(wlan.get_rssi())
+
+        fake_log.record.assert_called_once()
+
+
 class ConnectHostnameTests(unittest.TestCase):
     def test_dhcp_hostname_is_set_before_connecting(self):
         """Regression test: wlan.config(dhcp_hostname=...) used to be
@@ -95,6 +112,20 @@ class ConnectHostnameTests(unittest.TestCase):
         config_index = [c[0] for c in fake_wlan.method_calls].index("config")
         connect_index = [c[0] for c in fake_wlan.method_calls].index("connect")
         self.assertLess(config_index, connect_index, "hostname must be set before connect() sends the DHCP request")
+
+    def test_connect_failure_is_recorded_in_the_error_log(self):
+        fake_log = MagicMock()
+        with patch("WlanNetwork.wlanconnection.WLAN") as wlan_cls, \
+             patch("WlanNetwork.wlanconnection.led_error_twinkle"):
+            wlan_cls.return_value.isconnected.return_value = False
+            wlan_cls.return_value.connect.side_effect = OSError("no AP found")
+
+            wlan = WlanConnection("ssid", "key", "host", error_log=fake_log)
+            result = wlan.connect()
+
+        self.assertFalse(result)
+        fake_log.record.assert_called_once()
+        self.assertEqual(fake_log.record.call_args[0][0]['category'], 'network')
 
 
 class EnsureTimeSyncedTests(unittest.TestCase):
@@ -131,6 +162,16 @@ class EnsureTimeSyncedTests(unittest.TestCase):
             wlan.ensure_time_synced()
 
         settime_mock.assert_called_once()
+
+    def test_failed_sync_is_recorded_in_the_error_log(self):
+        fake_log = MagicMock()
+        wlan = WlanConnection("ssid", "key", "host", error_log=fake_log)
+        with patch("WlanNetwork.wlanconnection.time.gmtime", return_value=(2000, 1, 1, 0, 0, 29, 0, 0)), \
+             patch("WlanNetwork.wlanconnection.ntptime.settime", side_effect=OSError("NTP timeout")):
+            wlan.ensure_time_synced()
+
+        fake_log.record.assert_called_once()
+        self.assertEqual(fake_log.record.call_args[0][0]['category'], 'network')
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 import os
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -79,6 +79,23 @@ class ReadCurrentAverageTests(unittest.TestCase):
             result = sensor.readCurrentAverage()  # must not raise
 
         self.assertEqual(result, -999)
+
+    def test_scan_failure_is_recorded_in_the_error_log(self):
+        fake_log = MagicMock()
+        sensor = Temperature(gpio=16, error_log=fake_log)
+
+        def raise_error():
+            raise OSError("no devices on 1-wire bus")
+
+        fake_ds = FakeDS18X20(None, roms=[], readings={})
+        fake_ds.scan = raise_error
+
+        with patch("Temperature.temperature.ds18x20.DS18X20", return_value=fake_ds), \
+             patch("Temperature.temperature.onewire.OneWire", return_value=None):
+            sensor.readCurrentAverage()
+
+        fake_log.record.assert_called_once()
+        self.assertEqual(fake_log.record.call_args[0][0]['category'], 'hardware')
 
 
 if __name__ == "__main__":

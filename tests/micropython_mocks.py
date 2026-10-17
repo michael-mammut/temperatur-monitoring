@@ -6,6 +6,7 @@ Call install() once before importing any project module that (transitively)
 imports one of these MicroPython modules.
 """
 import base64
+import gc
 import json
 import sys
 import time
@@ -65,6 +66,9 @@ class FakeWLAN:
     def scan(self):
         return []
 
+    def status(self, *args):
+        return -60  # a plausible default RSSI in dBm
+
 
 def _install_module(name, **attrs):
     if name in sys.modules:
@@ -105,3 +109,10 @@ def install():
         time.ticks_ms = lambda: int(time.monotonic() * 1000)
     if not hasattr(time, "ticks_diff"):
         time.ticks_diff = lambda a, b: a - b
+
+    # MicroPython's gc module exposes mem_free()/mem_alloc(); CPython's
+    # doesn't track that, so stub plausible fixed values for tests.
+    if not hasattr(gc, "mem_free"):
+        gc.mem_free = lambda: 100000
+    if not hasattr(gc, "mem_alloc"):
+        gc.mem_alloc = lambda: 50000

@@ -4,13 +4,17 @@ import time
 
 from GpioControl.LedControl import led_error_twinkle
 from Notification import config as notification_config
+from WebServer.errorlog import CATEGORY_EXTERNAL_API, record_exception
 
 
 class Telegram:
-    def __init__(self, project_name="--not set--", morning_hour_message=8 - 2, afternoon_hour_message=16 - 2):
+    def __init__(self, project_name="--not set--", morning_hour_message=8 - 2, afternoon_hour_message=16 - 2,
+                 error_log=None, notification_log=None):
         self._project_name = project_name
         self._morning_message = morning_hour_message
         self._afternoon_message = afternoon_hour_message
+        self._error_log = error_log
+        self._notification_log = notification_log
 
     def set_project_name(self, project_name):
         self._project_name = project_name
@@ -30,8 +34,11 @@ class Telegram:
         try:
             res = urequests.post(url, data=body, headers={'Content-Type': 'application/json'})
             print(str(res.json()))
+            if self._notification_log is not None:
+                self._notification_log.record({})
         except Exception as ow_exc:
             print("Telegram notify failed:", ow_exc)
+            record_exception(self._error_log, CATEGORY_EXTERNAL_API, ow_exc)
             led_error_twinkle(22, 23, 100, 5)
         finally:
             if res is not None:

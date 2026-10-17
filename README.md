@@ -63,6 +63,109 @@ flowchart TD
 
 **Warum der Watchdog wichtig ist:** Bleibt `run_iteration()` irgendwo hängen (Netzwerk-Timeout, Sensor-Deadlock etc.), wird `wdt.feed()` nicht mehr aufgerufen. Nach 15 Sekunden ohne Feed löst der ESP32 selbstständig einen Reset aus — kein manuelles Eingreifen mehr nötig.
 
+### Fehlerprotokollierung — Klassen
+
+Vier Erzeuger (`Temperature`, `WlanConnection`, `Telegram`, `main.py`) schreiben über dieselbe Hilfsfunktion `record_exception()` in ein gemeinsames, von `AquariumMonitor` gehaltenes `EventLog`. `StatusServer` liest daraus für `/statistics`, ohne die Erzeuger selbst zu kennen.
+
+```mermaid
+classDiagram
+    class EventLog {
+        -_path : str
+        -_entries : list
+        +record(data)
+        +entries_within(seconds) list
+        +count_within(seconds) int
+    }
+
+    class LoginLog {
+        +record_login() previous_timestamp
+        +get_last_login() timestamp
+    }
+
+    class MonitoringSettings {
+        +get_ram_percent() float
+        +get_storage_percent() float
+        +set_thresholds(ram, storage)
+    }
+
+    class Temperature {
+        -_error_log : EventLog
+        +readCurrentAverage() float
+    }
+    class WlanConnection {
+        -_error_log : EventLog
+        +connect() bool
+        +ensure_time_synced()
+        +get_rssi() int
+    }
+    class Telegram {
+        -_error_log : EventLog
+        -_notification_log : EventLog
+        +notify(message)
+    }
+
+    class AquariumMonitor {
+        +error_log : EventLog
+        +notification_log : EventLog
+        +login_log : LoginLog
+        +monitoring_settings : MonitoringSettings
+        +run_iteration()
+        -_check_resource_usage()
+    }
+
+    class StatusServer {
+        -_error_log : EventLog
+        -_notification_log : EventLog
+        -_login_log : LoginLog
+        -_monitoring_settings : MonitoringSettings
+        +render_statistics(monitor, previous_login) html
+        +render_settings() html
+    }
+
+    AquariumMonitor *-- "1" EventLog : error_log
+    AquariumMonitor *-- "1" EventLog : notification_log
+    AquariumMonitor *-- "1" LoginLog
+    AquariumMonitor *-- "1" MonitoringSettings
+    AquariumMonitor *-- "2" Temperature : ambient_sensor, water_sensor
+    AquariumMonitor *-- "1" WlanConnection : wlan
+    AquariumMonitor *-- "1" Telegram : telegram
+
+    Temperature ..> EventLog : record_exception()
+    WlanConnection ..> EventLog : record_exception()
+    Telegram ..> EventLog : record_exception()
+    Telegram ..> EventLog : record() bei Erfolg
+
+    StatusServer ..> EventLog : entries_within() / count_within()
+    StatusServer ..> LoginLog : record_login()
+    StatusServer ..> MonitoringSettings : get_*_percent()
+```
+
+### Fehlerprotokollierung — Ablauf (Schreiben + Lesen)
+
+```mermaid
+sequenceDiagram
+    participant Loop as main() Hauptschleife
+    participant Sensor as Temperature
+    participant Rec as record_exception()
+    participant Log as EventLog<br/>(error_log.json)
+    participant Browser
+    participant Server as StatusServer
+
+    Loop->>Sensor: readCurrentAverage()
+    Sensor->>Sensor: ds18x20-Lesefehler (OSError)
+    Sensor->>Rec: record_exception(error_log, HARDWARE, exc)
+    Rec->>Log: record({category, code, message})
+    Log->>Log: Timestamp anhängen, auf 200 Einträge kappen,<br/>als JSON auf Flash schreiben
+
+    Note over Browser,Server: später, unabhängig vom Loop
+
+    Browser->>Server: GET /statistics (HTTP Basic Auth)
+    Server->>Log: entries_within(30 Tage)
+    Log-->>Server: [...Fehlereinträge...]
+    Server->>Server: Diagramm (SVG) + Tabelle<br/>(max. 20 Zeilen, siehe MemoryError-Fix)
+    Server-->>Browser: HTML-Antwort
+```
+
 ## Software-Struktur
 
 | Datei | Zweck |
@@ -75,9 +178,14 @@ flowchart TD
 | [WlanNetwork/wlanconnection.py](WlanNetwork/wlanconnection.py) | WLAN-Verbindungsaufbau inkl. NTP-Zeitsynchronisation |
 | [GpioControl/ActorControl.py](GpioControl/ActorControl.py) | Ein-/Ausschalten eines Relais-Kanals |
 | [GpioControl/LedControl.py](GpioControl/LedControl.py) | Status-/Fehler-LEDs blinken lassen |
-| [WebServer/statusserver.py](WebServer/statusserver.py) | HTTP-Server: Status-Seite (`/`), Einstellungen (`/settings`, `/wifi-settings`) |
+| [WebServer/statusserver.py](WebServer/statusserver.py) | HTTP-Server: Status-Seite (`/`), Einstellungen (`/settings`, `/wifi-settings`), Statistik (`/statistics`) |
 | [WebServer/settings.py](WebServer/settings.py) | Persistiert den Aquarium-Namen |
 | [WlanNetwork/wifisettings.py](WlanNetwork/wifisettings.py) | Persistiert WLAN-Zugangsdaten, die über `/wifi-settings` geändert wurden |
+| [WebServer/eventlog.py](WebServer/eventlog.py) | Persistierter, auf 200 Einträge begrenzter Event-Log (Basis für Fehler- und Benachrichtigungs-Protokoll) |
+| [WebServer/errorlog.py](WebServer/errorlog.py) | Fehlerkategorien (System/Hardware/Netzwerk/Externe APIs) + Hilfsfunktion zum Mitschreiben einer Exception |
+| [WebServer/loginlog.py](WebServer/loginlog.py) | Persistiert den Zeitpunkt des letzten erfolgreichen Logins |
+| [WebServer/systemstats.py](WebServer/systemstats.py) | RAM- und Flash-Belegung (`gc`, `os.statvfs`) |
+| [Monitoring/settings.py](Monitoring/settings.py) | Persistiert die RAM-/Flash-Warnschwellen, die über `/settings` geändert wurden |
 | `*/config.py` | Je Modul eigene Konfiguration (siehe unten) |
 
 ## Konfigurationsparameter
@@ -165,13 +273,25 @@ cp WebServer/config.example.py WebServer/config.py
 |---|---|
 | `WATCHDOG_TIMEOUT_MS` | Zeit in Millisekunden, nach der der Watchdog ohne `feed()` einen Reset auslöst (aktuell 15000 = 15 s) |
 
+### `Monitoring/config.py`
+
+Keine Secrets, daher regulär in Git. Werte sind auch über `/settings` zur Laufzeit änderbar (siehe unten) — eine Änderung dort überschreibt diese Defaults dauerhaft.
+
+| Parameter | Bedeutung |
+|---|---|
+| `RAM_FREE_WARNING_PERCENT` | Fällt der freie RAM unter diesen Prozentsatz, wird einmalig eine Telegram-Warnung gesendet (erst nach Erholung über den Schwellwert wieder scharf) |
+| `STORAGE_FREE_WARNING_PERCENT` | Dasselbe für den freien Flash-Speicher |
+
 ## Web-Oberfläche
 
 | URL | Zugriff | Zweck |
 |---|---|---|
 | `http://<IP>/` | öffentlich | Temperaturen, Online-Status, Zeitstempel der letzten Messung |
-| `http://<IP>/settings` | Admin-Passwort | Aquarium-Namen ändern |
+| `http://<IP>/settings` | Admin-Passwort | Aquarium-Namen ändern, RAM-/Flash-Warnschwellen anpassen |
 | `http://<IP>/wifi-settings` | Admin-Passwort | WLAN-Netzwerk per Dropdown wählen + neues Passwort setzen; speichert und startet das Gerät neu |
+| `http://<IP>/statistics` | Admin-Passwort | RAM-/Flash-Belegung, letzter Login, WLAN-Signalstärke, Anzahl gesendeter Benachrichtigungen (30 Tage), Fehler-Diagramm + -Tabelle (30 Tage, nach System/Hardware/Netzwerk/Externe APIs). Aktualisiert sich automatisch alle 30 s, zeigt maximal die letzten 20 Fehler. |
+
+`/` aktualisiert sich ebenfalls automatisch alle 30 s; `/settings` und `/wifi-settings` nicht.
 
 Details zur Absicherung (Zugriffsschutz, Eingabevalidierung, bekannte Grenzen) stehen in [SECURITY.md](SECURITY.md).
 
@@ -195,7 +315,7 @@ Details zur Absicherung (Zugriffsschutz, Eingabevalidierung, bekannte Grenzen) s
    mpremote connect $PORT fs cp boot.py :boot.py
    mpremote connect $PORT fs cp config.py :config.py
    mpremote connect $PORT fs cp main.py :main.py
-   for dir in Airpump GpioControl Notification Temperature WlanNetwork WebServer; do
+   for dir in Airpump GpioControl Notification Temperature WlanNetwork WebServer Monitoring; do
      mpremote connect $PORT fs cp -r "$dir" :
    done
    ```

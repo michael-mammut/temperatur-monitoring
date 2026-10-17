@@ -91,6 +91,36 @@ class NotifyClosesResponseTests(unittest.TestCase):
         with patch("Notification.telegram.urequests.post", side_effect=OSError("no route to host")):
             telegram.notify("hello")  # must not raise, no response to close
 
+    def test_successful_send_is_recorded_in_the_notification_log(self):
+        fake_notification_log = MagicMock()
+        telegram = Telegram("Vorzimmer", notification_log=fake_notification_log)
+        fake_response = MagicMock()
+        fake_response.json.return_value = {"ok": True}
+
+        with patch("Notification.telegram.urequests.post", return_value=fake_response):
+            telegram.notify("hello")
+
+        fake_notification_log.record.assert_called_once()
+
+    def test_failed_send_is_not_recorded_in_the_notification_log(self):
+        fake_notification_log = MagicMock()
+        telegram = Telegram("Vorzimmer", notification_log=fake_notification_log)
+
+        with patch("Notification.telegram.urequests.post", side_effect=OSError("no route to host")):
+            telegram.notify("hello")
+
+        fake_notification_log.record.assert_not_called()
+
+    def test_failed_send_is_recorded_in_the_error_log(self):
+        fake_error_log = MagicMock()
+        telegram = Telegram("Vorzimmer", error_log=fake_error_log)
+
+        with patch("Notification.telegram.urequests.post", side_effect=OSError("no route to host")):
+            telegram.notify("hello")
+
+        fake_error_log.record.assert_called_once()
+        self.assertEqual(fake_error_log.record.call_args[0][0]['category'], 'external_api')
+
 
 class NotificationTimingTests(unittest.TestCase):
     def test_first_run_always_notifies(self):

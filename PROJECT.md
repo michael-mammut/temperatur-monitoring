@@ -43,7 +43,19 @@ Web-Status-Seite und eine Einstellungsseite für den Aquarium-Namen
 **Laufend** — WLAN-Zugangsdaten über die Web-Oberfläche änderbar
 (Dropdown + Passwortfeld), abgesichert durch HTTP Basic Auth,
 Eingabevalidierung, HTML-Escaping und Request-Size-Limits — siehe
-[SECURITY.md](SECURITY.md).
+[SECURITY.md](SECURITY.md). Dazu eine `/statistics`-Seite (RAM-/Flash-
+Belegung, letzter Login, WLAN-Signalstärke, Benachrichtigungen der
+letzten 30 Tage, Fehler-Diagramm + -Tabelle nach Kategorie
+System/Hardware/Netzwerk/Externe APIs) sowie die dafür nötige
+Fehlerprotokollierung in allen betroffenen Modulen. Dabei auf echter
+Hardware einen `MemoryError` gefunden, der das Rendern von `/statistics`
+komplett verhinderte, sobald das Fehler-Log seine 200-Einträge-Grenze
+erreicht hatte (Tabelle zeigt seither maximal die letzten 20 Zeilen) —
+und beim Deployen selbst ebenfalls einen `MemoryError`, weil größere
+Dateien bisher als ein einziger Base64-Block statt in kleinen Chunks
+übertragen wurden. Außerdem eine Telegram-Warnung, wenn freier RAM oder
+Flash unter einen konfigurierbaren Prozentsatz fällt
+(`Monitoring/config.py`, zusätzlich über `/settings` änderbar).
 
 ## Wie KI in diesem Projekt eingesetzt wird
 
@@ -76,15 +88,20 @@ echte Hardware zu benötigen.
 
 | Testdatei | Anzahl Tests | Prüft |
 |---|---|---|
-| [test_main.py](tests/test_main.py) | 7 | Hauptschleife: Watchdog-Fütterung, Fehlerisolierung pro Durchlauf, Sensor-Wiederverwendung, Verdrahtung der Web-Oberfläche |
-| [test_telegram.py](tests/test_telegram.py) | 8 | Telegram-Versand: Response-Schließung, UTF-8-Byte-Kodierung, Benachrichtigungs-Timing |
-| [test_temperature.py](tests/test_temperature.py) | 5 | Sensor-Mittelwertbildung, Absturzsicherheit bei Lesefehlern |
-| [test_wlanconnection.py](tests/test_wlanconnection.py) | 8 | WLAN-Verbindung, DHCP-Hostname, NTP-Zeitsync-Retry, Netzwerk-Scan (inkl. 30s-Cache) |
+| [test_main.py](tests/test_main.py) | 14 | Hauptschleife: Watchdog-Fütterung, Fehlerisolierung pro Durchlauf, Sensor-Wiederverwendung, Verdrahtung der Web-Oberfläche und der Logs, RAM-/Flash-Warnschwellen |
+| [test_telegram.py](tests/test_telegram.py) | 11 | Telegram-Versand: Response-Schließung, UTF-8-Byte-Kodierung, Benachrichtigungs-Timing, Fehler-/Benachrichtigungs-Protokoll |
+| [test_temperature.py](tests/test_temperature.py) | 6 | Sensor-Mittelwertbildung, Absturzsicherheit bei Lesefehlern, Fehlerprotokollierung |
+| [test_wlanconnection.py](tests/test_wlanconnection.py) | 12 | WLAN-Verbindung, DHCP-Hostname, NTP-Zeitsync-Retry, Netzwerk-Scan (inkl. 30s-Cache), Signalstärke, Fehlerprotokollierung |
 | [test_settings.py](tests/test_settings.py) | 3 | Persistenz des Aquarium-Namens über Neustarts |
 | [test_wifisettings.py](tests/test_wifisettings.py) | 11 | Persistenz + Validierung der WLAN-Zugangsdaten (SSID-/Passwort-Längen nach 802.11/WPA2-Spezifikation) |
-| [test_statusserver.py](tests/test_statusserver.py) | 16 | HTTP-Server: Routing, HTTP-Basic-Auth, HTML-Escaping (XSS), Request-Size-Limit, echte Socket-Kommunikation über Loopback |
+| [test_statusserver.py](tests/test_statusserver.py) | 29 | HTTP-Server: Routing, HTTP-Basic-Auth, HTML-Escaping (XSS), Request-Size-Limit, Statistik-Seite (inkl. Zeilenbegrenzung gegen MemoryError), Warnschwellen-Formular, echte Socket-Kommunikation über Loopback |
+| [test_eventlog.py](tests/test_eventlog.py) | 6 | Persistierter Event-Log: 30-Tage-Fenster, Begrenzung auf 200 Einträge |
+| [test_errorlog.py](tests/test_errorlog.py) | 3 | Exception → Fehlerkategorie/-code/-meldung |
+| [test_loginlog.py](tests/test_loginlog.py) | 3 | Login-Zeitpunkt-Persistenz, Rückgabe des *vorherigen* Logins |
+| [test_systemstats.py](tests/test_systemstats.py) | 2 | RAM-/Flash-Belegung (`used + free == total`) |
+| [test_monitoringsettings.py](tests/test_monitoringsettings.py) | 7 | Persistenz + Validierung der RAM-/Flash-Warnschwellen (5–50 %) |
 
-**Gesamt: 58 Tests**, Stand des letzten vollständigen Durchlaufs in diesem
+**Gesamt: 107 Tests**, Stand des letzten vollständigen Durchlaufs in diesem
 Dokument. Viele Tests sind als Regressionstests für konkret auf der
 Hardware beobachtete Bugs angelegt (siehe Docstrings in den jeweiligen
 Testdateien) — sie beschreiben bewusst, *welches reale Problem* sie

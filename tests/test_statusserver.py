@@ -56,18 +56,22 @@ class _FakeWifiSettings:
 
 
 class _FakeWlan:
-    def __init__(self, networks=("NetworkA", "NetworkB")):
+    def __init__(self, networks=("NetworkA", "NetworkB"), rssi=-55):
         self._networks = list(networks)
+        self._rssi = rssi
 
     def scan_networks(self):
         return self._networks
 
+    def get_rssi(self):
+        return self._rssi
+
 
 def _fake_monitor(water=21.5, ambient=22.0, measured_at=(2024, 1, 1, 12, 30, 45, 0, 0),
-                   name="Vorzimmer", networks=("NetworkA", "NetworkB")):
+                   name="Vorzimmer", networks=("NetworkA", "NetworkB"), rssi=-55):
     return SimpleNamespace(
         telegram=_FakeTelegram(name),
-        wlan=_FakeWlan(networks),
+        wlan=_FakeWlan(networks, rssi=rssi),
         last_water_temperature=water,
         last_ambient_temperature=ambient,
         last_measurement_time=measured_at,
@@ -79,13 +83,36 @@ def _basic_auth_header(password, username="admin"):
     return "Basic " + token
 
 
-def _new_server(settings=None, wifi_settings=None, admin_password=ADMIN_PASSWORD, reset_callback=None):
+class _FakeMonitoringSettings:
+    def __init__(self, ram_percent=20, storage_percent=20):
+        self._ram_percent = ram_percent
+        self._storage_percent = storage_percent
+        self.saved_thresholds = None
+
+    def get_ram_percent(self):
+        return self._ram_percent
+
+    def get_storage_percent(self):
+        return self._storage_percent
+
+    def set_thresholds(self, ram_percent, storage_percent):
+        self._ram_percent = ram_percent
+        self._storage_percent = storage_percent
+        self.saved_thresholds = (ram_percent, storage_percent)
+
+
+def _new_server(settings=None, wifi_settings=None, admin_password=ADMIN_PASSWORD, reset_callback=None,
+                 error_log=None, notification_log=None, login_log=None, monitoring_settings=None):
     return StatusServer(
         0,
         settings or _FakeSettings(),
         wifi_settings or _FakeWifiSettings(),
         admin_password,
         reset_callback or MagicMock(),
+        error_log=error_log,
+        notification_log=notification_log,
+        login_log=login_log,
+        monitoring_settings=monitoring_settings,
     )
 
 
@@ -237,6 +264,104 @@ class SettingsAuthTests(unittest.TestCase):
         self.assertEqual(monitor.telegram._project_name, "Wohnzimmer")
 
 
+class MonitoringThresholdsOnSettingsPageTests(unittest.TestCase):
+    def test_get_settings_shows_current_thresholds(self):
+        monitoring_settings = _FakeMonitoringSettings(ram_percent=25, storage_percent=30)
+        server = _new_server(monitoring_settings=monitoring_settings)
+        server._test_monitor = _fake_monitor()
+        try:
+            request = (
+                "GET /settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
+            ).encode()
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn('name="ram_percent" value="25"', response)
+        self.assertIn('name="storage_percent" value="30"', response)
+
+    def test_settings_page_without_monitoring_settings_omits_threshold_fields(self):
+        """Backward compatible: callers that don't pass monitoring_settings
+        (e.g. existing simpler tests/deployments) must not break."""
+        server = _new_server(monitoring_settings=None)
+        server._test_monitor = _fake_monitor()
+        try:
+            request = (
+                "GET /settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
+            ).encode()
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertNotIn("ram_percent", response)
+
+    def test_post_settings_saves_name_and_thresholds_together(self):
+        settings = _FakeSettings("Vorzimmer")
+        monitoring_settings = _FakeMonitoringSettings(ram_percent=20, storage_percent=20)
+        server = _new_server(settings=settings, monitoring_settings=monitoring_settings)
+        server._test_monitor = _fake_monitor(name="Vorzimmer")
+        try:
+            body = b"name=Wohnzimmer&ram_percent=15&storage_percent=10"
+            request = (
+                "POST /settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n"
+                "Content-Type: application/x-www-form-urlencoded\r\n"
+                "Content-Length: " + str(len(body)) + "\r\n\r\n"
+            ).encode() + body
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("200 OK", response)
+        self.assertIn("Gespeichert", response)
+        self.assertEqual(settings.get_name(), "Wohnzimmer")
+        self.assertEqual(monitoring_settings.saved_thresholds, (15.0, 10.0))
+
+    def test_post_settings_with_out_of_range_threshold_saves_nothing(self):
+        """Regression target: validation failure must be atomic - a bad
+        threshold value must not silently let the name change through."""
+        settings = _FakeSettings("Vorzimmer")
+        monitoring_settings = _FakeMonitoringSettings(ram_percent=20, storage_percent=20)
+        server = _new_server(settings=settings, monitoring_settings=monitoring_settings)
+        server._test_monitor = _fake_monitor(name="Vorzimmer")
+        try:
+            body = b"name=Wohnzimmer&ram_percent=99&storage_percent=20"
+            request = (
+                "POST /settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n"
+                "Content-Type: application/x-www-form-urlencoded\r\n"
+                "Content-Length: " + str(len(body)) + "\r\n\r\n"
+            ).encode() + body
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("Fehler", response)
+        self.assertEqual(settings.get_name(), "Vorzimmer")  # unchanged
+        self.assertIsNone(monitoring_settings.saved_thresholds)
+
+    def test_post_settings_with_non_numeric_threshold_is_rejected(self):
+        monitoring_settings = _FakeMonitoringSettings()
+        server = _new_server(monitoring_settings=monitoring_settings)
+        server._test_monitor = _fake_monitor()
+        try:
+            body = b"name=Vorzimmer&ram_percent=abc&storage_percent=20"
+            request = (
+                "POST /settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n"
+                "Content-Type: application/x-www-form-urlencoded\r\n"
+                "Content-Length: " + str(len(body)) + "\r\n\r\n"
+            ).encode() + body
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("Fehler", response)
+        self.assertIsNone(monitoring_settings.saved_thresholds)
+
+
 class WifiSettingsPageTests(unittest.TestCase):
     def test_get_wifi_settings_lists_scanned_networks(self):
         wifi_settings = _FakeWifiSettings(ssid="OldNetwork")
@@ -358,6 +483,158 @@ class WifiSettingsPageTests(unittest.TestCase):
         self.assertIn("Fehler", response)
         self.assertIsNone(wifi_settings.saved_credentials)
         reset_callback.assert_not_called()
+
+
+class StatisticsPageTests(unittest.TestCase):
+    def test_get_statistics_without_auth_is_rejected(self):
+        server = _new_server()
+        server._test_monitor = _fake_monitor()
+        try:
+            response = _request(server, b"GET /statistics HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        finally:
+            server._socket.close()
+
+        self.assertIn("401", response)
+
+    def test_statistics_page_shows_memory_rssi_and_notification_count(self):
+        notification_log = MagicMock()
+        notification_log.count_within.return_value = 7
+        server = _new_server(notification_log=notification_log)
+        server._test_monitor = _fake_monitor(rssi=-42)
+        try:
+            request = (
+                "GET /statistics HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
+            ).encode()
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("200 OK", response)
+        self.assertIn("-42 dBm", response)
+        self.assertIn("7", response)  # notification count
+        self.assertIn('http-equiv="refresh" content="30"', response)
+
+    def test_statistics_page_shows_previous_login_not_the_current_one(self):
+        """Regression target: visiting /statistics is itself a login - the
+        page must show the login BEFORE this one, not trivially "just now"."""
+        login_log = MagicMock()
+        login_log.record_login.return_value = 1700000000  # some earlier timestamp
+        server = _new_server(login_log=login_log)
+        server._test_monitor = _fake_monitor()
+        try:
+            request = (
+                "GET /statistics HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
+            ).encode()
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        login_log.record_login.assert_called_once()
+        self.assertNotIn("noch nie", response)
+
+    def test_statistics_page_shows_never_logged_in_when_no_login_log(self):
+        server = _new_server(login_log=None)
+        server._test_monitor = _fake_monitor()
+        try:
+            request = (
+                "GET /statistics HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
+            ).encode()
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("noch nie", response)
+
+    def test_statistics_page_shows_error_chart_and_table(self):
+        error_log = MagicMock()
+        error_log.entries_within.return_value = [
+            {'timestamp': 1700000000, 'category': 'hardware', 'code': 'OSError', 'message': 'sensor missing'},
+            {'timestamp': 1700000100, 'category': 'network', 'code': 'OSError', 'message': 'no AP found'},
+        ]
+        server = _new_server(error_log=error_log)
+        server._test_monitor = _fake_monitor()
+        try:
+            request = (
+                "GET /statistics HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
+            ).encode()
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("<svg", response)
+        self.assertIn("sensor missing", response)
+        self.assertIn("no AP found", response)
+        self.assertIn("OSError", response)
+
+    def test_statistics_page_caps_displayed_rows_to_avoid_large_allocation(self):
+        """Regression test found on real hardware: joining up to 200 rows
+        into one HTML string needs a single large contiguous allocation,
+        which failed with a MemoryError on the ESP32's fragmented heap even
+        though gc.mem_free() reported plenty of *total* free memory."""
+        error_log = MagicMock()
+        error_log.entries_within.return_value = [
+            {'timestamp': 1700000000 + i, 'category': 'hardware', 'code': 'OSError', 'message': 'entry %d' % i}
+            for i in range(150)
+        ]
+        server = _new_server(error_log=error_log)
+        server._test_monitor = _fake_monitor()
+        try:
+            request = (
+                "GET /statistics HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
+            ).encode()
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("200 OK", response)
+        self.assertEqual(response.count("<tr>"), 1 + 20 + 1)  # header + 20 rows + "...n more" row
+        self.assertIn("letzten 20 von 150", response)
+        self.assertIn("entry 149", response)  # newest entry is shown
+        self.assertNotIn("entry 0", response)  # oldest entry got truncated away
+
+    def test_statistics_page_error_message_is_html_escaped(self):
+        """Error messages ultimately come from exception text - if one ever
+        contains attacker-influenced data (e.g. a malformed response body
+        echoed into an error message), it must not inject into the page."""
+        error_log = MagicMock()
+        error_log.entries_within.return_value = [
+            {'timestamp': 1700000000, 'category': 'network', 'code': 'OSError',
+             'message': '<script>alert(1)</script>'},
+        ]
+        server = _new_server(error_log=error_log)
+        server._test_monitor = _fake_monitor()
+        try:
+            request = (
+                "GET /statistics HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
+            ).encode()
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertNotIn("<script>alert(1)</script>", response)
+        self.assertIn("&lt;script&gt;", response)
+
+    def test_statistics_page_shows_no_errors_message_when_log_empty(self):
+        error_log = MagicMock()
+        error_log.entries_within.return_value = []
+        server = _new_server(error_log=error_log)
+        server._test_monitor = _fake_monitor()
+        try:
+            request = (
+                "GET /statistics HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
+            ).encode()
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("Keine Fehler", response)
 
 
 class RequestSizeLimitTests(unittest.TestCase):

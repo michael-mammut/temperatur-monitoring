@@ -1,0 +1,45 @@
+import ujson
+
+_PATH = 'monitoring_settings.json'
+
+MIN_WARNING_PERCENT = 5
+MAX_WARNING_PERCENT = 50
+
+
+class MonitoringSettings:
+    """Persists the RAM/Flash free-space warning thresholds entered via the
+    /settings page to a JSON file on flash, so a change survives a reboot
+    without re-flashing Monitoring/config.py."""
+
+    def __init__(self, default_ram_percent, default_storage_percent):
+        self._ram_percent = default_ram_percent
+        self._storage_percent = default_storage_percent
+        try:
+            with open(_PATH) as f:
+                data = ujson.load(f)
+            self._ram_percent = data.get('ram_percent', default_ram_percent)
+            self._storage_percent = data.get('storage_percent', default_storage_percent)
+        except (OSError, ValueError):
+            pass  # no override file yet, keep the defaults from config.py
+
+    def get_ram_percent(self):
+        return self._ram_percent
+
+    def get_storage_percent(self):
+        return self._storage_percent
+
+    def set_thresholds(self, ram_percent, storage_percent):
+        self._ram_percent = ram_percent
+        self._storage_percent = storage_percent
+        with open(_PATH, 'w') as f:
+            ujson.dump({'ram_percent': ram_percent, 'storage_percent': storage_percent}, f)
+
+
+def validate_percent(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "Wert muss eine Zahl sein.", None
+    if number < MIN_WARNING_PERCENT or number > MAX_WARNING_PERCENT:
+        return "Wert muss zwischen {} und {} liegen.".format(MIN_WARNING_PERCENT, MAX_WARNING_PERCENT), None
+    return None, number

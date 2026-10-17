@@ -1,5 +1,6 @@
 from network import WLAN, STA_IF
 from GpioControl.LedControl import led_twinkle, led_error_twinkle
+from WebServer.errorlog import CATEGORY_NETWORK, record_exception
 import machine, ntptime, time
 
 
@@ -7,16 +8,24 @@ _SCAN_CACHE_TTL_MS = 30000
 
 
 class WlanConnection:
-    def __init__(self, ssid, key, hostname):
+    def __init__(self, ssid, key, hostname, error_log=None):
         self.__ssid = ssid
         self.__key = key
         self.__hostname = hostname
+        self._error_log = error_log
         self._scan_cache = None
         self._scan_cache_time = None
 
     def isConnected(self):
         wlan = WLAN(STA_IF)
         return wlan.isconnected()
+
+    def get_rssi(self):
+        try:
+            return WLAN(STA_IF).status('rssi')
+        except Exception as exc:
+            record_exception(self._error_log, CATEGORY_NETWORK, exc)
+            return None
 
     def scan_networks(self):
         # Scanning while associated to an AP takes several seconds (it has
@@ -58,8 +67,9 @@ class WlanConnection:
         wlan.config(dhcp_hostname=self.__hostname)
         try:
             wlan.connect(self.__ssid, self.__key)
-        except:
+        except Exception as exc:
             print("offline")
+            record_exception(self._error_log, CATEGORY_NETWORK, exc)
             led_error_twinkle(22, 23, 200, 2)
             return False
 
@@ -97,5 +107,4 @@ class WlanConnection:
             print("Local time after synchronization： %s " % str(time.gmtime()))
         except Exception as exc:
             print("NTP sync failed:", exc)
-
-        
+            record_exception(self._error_log, CATEGORY_NETWORK, exc)

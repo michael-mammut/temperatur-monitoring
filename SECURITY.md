@@ -1,8 +1,8 @@
 # Sicherheit: WLAN-Zugangsdaten & Web-Oberfläche
 
 Dieses Dokument beschreibt, wie WLAN-Zugangsdaten gespeichert werden, wie die
-Web-Oberfläche (`/settings`, `/wifi-settings`) abgesichert ist, und welche
-Grenzen diese Absicherung bewusst hat.
+Web-Oberfläche (`/settings`, `/wifi-settings`, `/statistics`) abgesichert ist,
+und welche Grenzen diese Absicherung bewusst hat.
 
 ## Wo WLAN-Zugangsdaten gespeichert werden
 
@@ -40,9 +40,16 @@ dagegen ist physische Zugangskontrolle zum Gerät selbst, keine Software.
 
 ## Zugriffsschutz für die Web-Oberfläche
 
-`/settings` (Aquarium-Name ändern) und `/wifi-settings` (WLAN-Zugangsdaten
-ändern) sind per **HTTP Basic Auth** geschützt. `/` (Status-Seite) bleibt
-bewusst öffentlich — sie zeigt nur Messwerte, keine sensiblen Daten.
+`/settings` (Aquarium-Name ändern), `/wifi-settings` (WLAN-Zugangsdaten
+ändern) und `/statistics` (System-/Fehlerstatistik) sind per **HTTP Basic
+Auth** geschützt. `/` (Status-Seite) bleibt bewusst öffentlich — sie zeigt
+nur Messwerte, keine sensiblen Daten.
+
+Jeder erfolgreiche Login auf einer der drei geschützten Seiten wird
+persistiert ([WebServer/loginlog.py](WebServer/loginlog.py)) und auf
+`/statistics` als "Letzter Login" angezeigt — dabei immer der *vorherige*
+Zeitpunkt, nicht der gerade stattfindende (sonst stünde dort trivial immer
+"gerade jetzt").
 
 - Admin-Passwort liegt in [WebServer/config.py](WebServer/config.py)
   (`ADMIN_PASSWORD`) — nicht in Git, analog zu den WLAN-/Telegram-Secrets.
@@ -62,6 +69,10 @@ bewusst öffentlich — sie zeigt nur Messwerte, keine sensiblen Daten.
 | Ungültige/zu lange SSID oder Passwort | Validierung nach 802.11-/WPA2-Spezifikation (SSID ≤ 32 Byte, Passwort 8–63 Zeichen oder leer für offene Netze) vor jedem Speichern |
 | Falsches WLAN-Passwort führt zum Aussperren | Speichern + Neustart passiert nur nach erfolgreicher Validierung; bei einem Fehler bleibt das Gerät mit den alten, funktionierenden Zugangsdaten online |
 | Passwort-Leck über die Oberfläche selbst | Passwortfeld ist write-only — der gespeicherte Wert wird nie wieder angezeigt, auch nicht im HTML-Quelltext |
+| XSS über Fehlermeldungen auf `/statistics` | Fehlermeldungen stammen aus internem Exception-Text, nicht direkt aus Nutzereingaben — werden aber trotzdem HTML-escaped ausgegeben, falls eine Meldung einmal externe Daten enthält (z. B. eine Server-Antwort) |
+| Unbegrenztes Wachstum von Fehler-/Benachrichtigungs-Log | [WebServer/eventlog.py](WebServer/eventlog.py) begrenzt jedes Log hart auf 200 Einträge, unabhängig vom Alter — ein Crash-Loop kann die Datei (und die JSON-Parse-Kosten beim Laden) nicht unbegrenzt wachsen lassen |
+| `MemoryError` beim Rendern von `/statistics` durch zu viele Fehler-Zeilen in einem Stück | Tabelle zeigt maximal die letzten 20 von bis zu 200 Einträgen — auf echter Hardware reproduziert und verifiziert (ein `join()` über 200 Zeilen schlug an der Heap-Fragmentierung fehl, auch bei insgesamt ausreichend freiem Speicher) |
+| Ungültige RAM-/Flash-Warnschwelle auf `/settings` | Werte müssen zwischen 5 % und 50 % liegen ([Monitoring/settings.py](Monitoring/settings.py)); eine fehlgeschlagene Validierung speichert **nichts** — auch nicht den gleichzeitig eingereichten Aquarium-Namen (atomar) |
 
 ## Bekannte Grenzen (bewusst in Kauf genommen)
 
