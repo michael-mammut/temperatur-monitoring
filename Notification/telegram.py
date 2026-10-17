@@ -9,12 +9,13 @@ from WebServer.errorlog import CATEGORY_EXTERNAL_API, record_exception
 
 class Telegram:
     def __init__(self, project_name="--not set--", morning_hour_message=8 - 2, afternoon_hour_message=16 - 2,
-                 error_log=None, notification_log=None):
+                 error_log=None, notification_log=None, logging_settings=None):
         self._project_name = project_name
         self._morning_message = morning_hour_message
         self._afternoon_message = afternoon_hour_message
         self._error_log = error_log
         self._notification_log = notification_log
+        self._logging_settings = logging_settings
 
     def set_project_name(self, project_name):
         self._project_name = project_name
@@ -38,7 +39,7 @@ class Telegram:
                 self._notification_log.record({})
         except Exception as ow_exc:
             print("Telegram notify failed:", ow_exc)
-            record_exception(self._error_log, CATEGORY_EXTERNAL_API, ow_exc)
+            record_exception(self._error_log, CATEGORY_EXTERNAL_API, ow_exc, logging_settings=self._logging_settings)
             led_error_twinkle(22, 23, 100, 5)
         finally:
             if res is not None:

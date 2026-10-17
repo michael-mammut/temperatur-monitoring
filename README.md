@@ -75,6 +75,9 @@ classDiagram
         +record(data)
         +entries_within(seconds) list
         +count_within(seconds) int
+        +file_size() int
+        +delete_older_than(seconds) int
+        +trim_oldest_to_free(target_bytes) int
     }
 
     class LoginLog {
@@ -82,18 +85,26 @@ classDiagram
         +get_last_login() timestamp
     }
 
+    class LoggingSettings {
+        +is_enabled(category) bool
+        +set_enabled(enabled_by_category)
+    }
+
     class MonitoringSettings {
         +get_ram_percent() float
         +get_storage_percent() float
-        +set_thresholds(ram, storage)
+        +get_log_storage_percent() float
+        +set_thresholds(ram, storage, log_storage)
     }
 
     class Temperature {
         -_error_log : EventLog
+        -_logging_settings : LoggingSettings
         +readCurrentAverage() float
     }
     class WlanConnection {
         -_error_log : EventLog
+        -_logging_settings : LoggingSettings
         +connect() bool
         +ensure_time_synced()
         +get_rssi() int
@@ -101,6 +112,7 @@ classDiagram
     class Telegram {
         -_error_log : EventLog
         -_notification_log : EventLog
+        -_logging_settings : LoggingSettings
         +notify(message)
     }
 
@@ -108,15 +120,18 @@ classDiagram
         +error_log : EventLog
         +notification_log : EventLog
         +login_log : LoginLog
+        +logging_settings : LoggingSettings
         +monitoring_settings : MonitoringSettings
         +run_iteration()
         -_check_resource_usage()
+        -_enforce_log_storage_budget()
     }
 
     class StatusServer {
         -_error_log : EventLog
         -_notification_log : EventLog
         -_login_log : LoginLog
+        -_logging_settings : LoggingSettings
         -_monitoring_settings : MonitoringSettings
         +render_statistics(monitor, previous_login) html
         +render_settings() html
@@ -125,18 +140,25 @@ classDiagram
     AquariumMonitor *-- "1" EventLog : error_log
     AquariumMonitor *-- "1" EventLog : notification_log
     AquariumMonitor *-- "1" LoginLog
+    AquariumMonitor *-- "1" LoggingSettings
     AquariumMonitor *-- "1" MonitoringSettings
     AquariumMonitor *-- "2" Temperature : ambient_sensor, water_sensor
     AquariumMonitor *-- "1" WlanConnection : wlan
     AquariumMonitor *-- "1" Telegram : telegram
 
     Temperature ..> EventLog : record_exception()
+    Temperature ..> LoggingSettings : is_enabled()
     WlanConnection ..> EventLog : record_exception()
+    WlanConnection ..> LoggingSettings : is_enabled()
     Telegram ..> EventLog : record_exception()
     Telegram ..> EventLog : record() bei Erfolg
+    Telegram ..> LoggingSettings : is_enabled()
 
-    StatusServer ..> EventLog : entries_within() / count_within()
+    AquariumMonitor ..> EventLog : enforce_storage_budget()
+
+    StatusServer ..> EventLog : entries_within() / count_within() / delete_older_than()
     StatusServer ..> LoginLog : record_login()
+    StatusServer ..> LoggingSettings : is_enabled() / set_enabled()
     StatusServer ..> MonitoringSettings : get_*_percent()
 ```
 
@@ -181,11 +203,12 @@ sequenceDiagram
 | [WebServer/statusserver.py](WebServer/statusserver.py) | HTTP-Server: Status-Seite (`/`), Einstellungen (`/settings`, `/wifi-settings`), Statistik (`/statistics`) |
 | [WebServer/settings.py](WebServer/settings.py) | Persistiert den Aquarium-Namen |
 | [WlanNetwork/wifisettings.py](WlanNetwork/wifisettings.py) | Persistiert WLAN-Zugangsdaten, die über `/wifi-settings` geändert wurden |
-| [WebServer/eventlog.py](WebServer/eventlog.py) | Persistierter, auf 200 Einträge begrenzter Event-Log (Basis für Fehler- und Benachrichtigungs-Protokoll) |
+| [WebServer/eventlog.py](WebServer/eventlog.py) | Persistierter, auf 200 Einträge begrenzter Event-Log (Basis für Fehler- und Benachrichtigungs-Protokoll); enthält auch `enforce_storage_budget()` (hält Logs zusammen unter ihrem Flash-Anteil) |
 | [WebServer/errorlog.py](WebServer/errorlog.py) | Fehlerkategorien (System/Hardware/Netzwerk/Externe APIs) + Hilfsfunktion zum Mitschreiben einer Exception |
+| [WebServer/loggingsettings.py](WebServer/loggingsettings.py) | Persistiert, welche Fehlerkategorien überhaupt protokolliert werden (über `/settings` abschaltbar) |
 | [WebServer/loginlog.py](WebServer/loginlog.py) | Persistiert den Zeitpunkt des letzten erfolgreichen Logins |
 | [WebServer/systemstats.py](WebServer/systemstats.py) | RAM- und Flash-Belegung (`gc`, `os.statvfs`) |
-| [Monitoring/settings.py](Monitoring/settings.py) | Persistiert die RAM-/Flash-Warnschwellen, die über `/settings` geändert wurden |
+| [Monitoring/settings.py](Monitoring/settings.py) | Persistiert die RAM-/Flash-Warnschwellen und den Log-Speicher-Deckel, die über `/settings` geändert wurden |
 | `*/config.py` | Je Modul eigene Konfiguration (siehe unten) |
 
 ## Konfigurationsparameter
@@ -281,15 +304,16 @@ Keine Secrets, daher regulär in Git. Werte sind auch über `/settings` zur Lauf
 |---|---|
 | `RAM_FREE_WARNING_PERCENT` | Fällt der freie RAM unter diesen Prozentsatz, wird einmalig eine Telegram-Warnung gesendet (erst nach Erholung über den Schwellwert wieder scharf) |
 | `STORAGE_FREE_WARNING_PERCENT` | Dasselbe für den freien Flash-Speicher |
+| `MAX_LOG_STORAGE_PERCENT` | Fehler- und Benachrichtigungs-Log dürfen zusammen höchstens diesen Anteil des Flash-Speichers belegen — wird bei jedem Loop-Durchlauf geprüft, älteste Einträge werden sonst automatisch entfernt (siehe `WebServer/eventlog.py: enforce_storage_budget()`) |
 
 ## Web-Oberfläche
 
 | URL | Zugriff | Zweck |
 |---|---|---|
 | `http://<IP>/` | öffentlich | Temperaturen, Online-Status, Zeitstempel der letzten Messung |
-| `http://<IP>/settings` | Admin-Passwort | Aquarium-Namen ändern, RAM-/Flash-Warnschwellen anpassen |
+| `http://<IP>/settings` | Admin-Passwort | Aquarium-Namen ändern, RAM-/Flash-/Log-Speicher-Warnschwellen anpassen, Fehlerprotokollierung je Kategorie ein-/ausschalten |
 | `http://<IP>/wifi-settings` | Admin-Passwort | WLAN-Netzwerk per Dropdown wählen + neues Passwort setzen; speichert und startet das Gerät neu |
-| `http://<IP>/statistics` | Admin-Passwort | RAM-/Flash-Belegung, letzter Login, WLAN-Signalstärke, Anzahl gesendeter Benachrichtigungen (30 Tage), Fehler-Diagramm + -Tabelle (30 Tage, nach System/Hardware/Netzwerk/Externe APIs). Aktualisiert sich automatisch alle 30 s, zeigt maximal die letzten 20 Fehler. |
+| `http://<IP>/statistics` | Admin-Passwort | RAM-/Flash-Belegung (inkl. Log-Speicherverbrauch gegen den konfigurierten Deckel), letzter Login, WLAN-Signalstärke, Anzahl gesendeter Benachrichtigungen (30 Tage), Fehler-Diagramm + -Tabelle (30 Tage, nach System/Hardware/Netzwerk/Externe APIs, max. die letzten 20 Zeilen), Formular zum manuellen Löschen von Log-Einträgen älter als X Minuten. Aktualisiert sich automatisch alle 30 s. |
 
 `/` aktualisiert sich ebenfalls automatisch alle 30 s; `/settings` und `/wifi-settings` nicht.
 

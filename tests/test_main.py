@@ -166,6 +166,7 @@ class MainLoopWatchdogTests(_IsolatedCwdTestCase):
         self.assertIsInstance(kwargs["notification_log"], main.EventLog)
         self.assertIsInstance(kwargs["login_log"], main.LoginLog)
         self.assertIsInstance(kwargs["monitoring_settings"], main.MonitoringSettings)
+        self.assertIsInstance(kwargs["logging_settings"], main.LoggingSettings)
 
     def test_error_log_is_passed_to_sensors_wlan_and_telegram(self):
         """Regression target: without this wiring, hardware/network/API
@@ -180,6 +181,9 @@ class MainLoopWatchdogTests(_IsolatedCwdTestCase):
         self.assertEqual(main.Temperature.call_args_list[0].kwargs["error_log"], monitor.error_log)
         self.assertEqual(main.WlanConnection.call_args.kwargs["error_log"], monitor.error_log)
         self.assertEqual(main.Telegram.call_args.kwargs["error_log"], monitor.error_log)
+        self.assertEqual(main.Temperature.call_args_list[0].kwargs["logging_settings"], monitor.logging_settings)
+        self.assertEqual(main.WlanConnection.call_args.kwargs["logging_settings"], monitor.logging_settings)
+        self.assertEqual(main.Telegram.call_args.kwargs["logging_settings"], monitor.logging_settings)
         self.assertEqual(main.Telegram.call_args.kwargs["notification_log"], monitor.notification_log)
 
     def test_iteration_exception_does_not_stop_the_loop_and_watchdog_is_still_fed(self):
@@ -235,7 +239,7 @@ class ResourceUsageWarningTests(_IsolatedCwdTestCase):
         with patch("main.get_memory_stats", return_value={'used': 60, 'free': 40, 'total': 100}), \
              patch("main.get_storage_stats", return_value={'used': 20, 'free': 80, 'total': 100}):
             monitor = main.AquariumMonitor()
-            monitor.monitoring_settings.set_thresholds(ram_percent=50, storage_percent=20)
+            monitor.monitoring_settings.set_thresholds(ram_percent=50, storage_percent=20, log_storage_percent=15)
             monitor.run_iteration()
 
         # 40% free is above the hardcoded-default 20% but below the
@@ -317,6 +321,55 @@ class ResourceUsageWarningTests(_IsolatedCwdTestCase):
 
         get_memory.assert_not_called()
         monitor.telegram.notify.assert_not_called()
+
+
+class LogStorageBudgetTests(_IsolatedCwdTestCase):
+    """Regression target: logs must be kept under their configured share
+    of total flash, enforced every iteration regardless of WLAN state
+    (it's pure filesystem housekeeping, not something that needs to send
+    anything)."""
+
+    def test_enforced_every_iteration_even_when_wlan_disconnected(self):
+        patches = _patch_hardware()
+        for p in patches:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in patches])
+
+        with patch("main.enforce_storage_budget") as enforce_mock, \
+             patch("main.get_storage_stats", return_value={'used': 20, 'free': 80, 'total': 100}):
+            monitor = main.AquariumMonitor()
+            monitor.wlan.isConnected.return_value = False
+            monitor.run_iteration()
+
+        enforce_mock.assert_called_once_with(
+            [monitor.error_log, monitor.notification_log],
+            monitor.monitoring_settings.get_log_storage_percent(),
+            100,
+        )
+
+    def test_uses_the_configured_percent_not_a_hardcoded_value(self):
+        patches = _patch_hardware()
+        for p in patches:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in patches])
+
+        with patch("main.enforce_storage_budget") as enforce_mock, \
+             patch("main.get_storage_stats", return_value={'used': 20, 'free': 80, 'total': 100}):
+            monitor = main.AquariumMonitor()
+            monitor.monitoring_settings.set_thresholds(ram_percent=20, storage_percent=20, log_storage_percent=7)
+            monitor.run_iteration()
+
+        self.assertEqual(enforce_mock.call_args[0][1], 7)
+
+    def test_storage_stats_failure_does_not_crash_the_loop(self):
+        patches = _patch_hardware()
+        for p in patches:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in patches])
+
+        with patch("main.get_storage_stats", side_effect=OSError("no filesystem")):
+            monitor = main.AquariumMonitor()
+            monitor.run_iteration()  # must not raise
 
 
 if __name__ == "__main__":

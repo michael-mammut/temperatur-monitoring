@@ -72,7 +72,9 @@ Zeitpunkt, nicht der gerade stattfindende (sonst stünde dort trivial immer
 | XSS über Fehlermeldungen auf `/statistics` | Fehlermeldungen stammen aus internem Exception-Text, nicht direkt aus Nutzereingaben — werden aber trotzdem HTML-escaped ausgegeben, falls eine Meldung einmal externe Daten enthält (z. B. eine Server-Antwort) |
 | Unbegrenztes Wachstum von Fehler-/Benachrichtigungs-Log | [WebServer/eventlog.py](WebServer/eventlog.py) begrenzt jedes Log hart auf 200 Einträge, unabhängig vom Alter — ein Crash-Loop kann die Datei (und die JSON-Parse-Kosten beim Laden) nicht unbegrenzt wachsen lassen |
 | `MemoryError` beim Rendern von `/statistics` durch zu viele Fehler-Zeilen in einem Stück | Tabelle zeigt maximal die letzten 20 von bis zu 200 Einträgen — auf echter Hardware reproduziert und verifiziert (ein `join()` über 200 Zeilen schlug an der Heap-Fragmentierung fehl, auch bei insgesamt ausreichend freiem Speicher) |
-| Ungültige RAM-/Flash-Warnschwelle auf `/settings` | Werte müssen zwischen 5 % und 50 % liegen ([Monitoring/settings.py](Monitoring/settings.py)); eine fehlgeschlagene Validierung speichert **nichts** — auch nicht den gleichzeitig eingereichten Aquarium-Namen (atomar) |
+| Ungültige RAM-/Flash-/Log-Warnschwelle auf `/settings` | Werte müssen zwischen 5 % und 50 % liegen ([Monitoring/settings.py](Monitoring/settings.py)); eine fehlgeschlagene Validierung speichert **nichts** — auch nicht den gleichzeitig eingereichten Aquarium-Namen oder die Protokollierungs-Checkboxen (atomar) |
+| Unkontrolliertes Wachstum der Logs relativ zum Flash-Speicher | `enforce_storage_budget()` ([WebServer/eventlog.py](WebServer/eventlog.py)) hält Fehler- + Benachrichtigungs-Log zusammen unter einem konfigurierbaren Anteil des Flash-Speichers (Default 15 %), geprüft bei jedem Loop-Durchlauf — unabhängig vom 200-Einträge-Limit pro Log |
+| Ungültige Minutenangabe beim manuellen Logs-Löschen auf `/statistics` | Nicht-numerische oder nicht-positive Werte werden abgelehnt, ohne irgendetwas zu löschen |
 
 ## Bekannte Grenzen (bewusst in Kauf genommen)
 
@@ -89,6 +91,12 @@ Zeitpunkt, nicht der gerade stattfindende (sonst stünde dort trivial immer
   Telegram, Watchdog-Feed) steht. Ergebnis wird 30 s gecacht
   (`WlanConnection.scan_networks`), um das zu entschärfen — ganz vermeiden
   lässt es sich mit diesem Single-Thread-Design nicht.
+- **Wer das Admin-Passwort hat, kann die Protokollierung abschalten oder
+  Logs löschen.** Die Kategorie-Checkboxen auf `/settings` und der
+  "Logs löschen"-Button auf `/statistics` sind bewusst mächtig — jemand
+  mit (legitimem oder erschlichenem) Zugriff könnte damit eigene Spuren
+  verwischen. Da es keine zweite, unabhängige Protokoll-Ebene gibt, ist
+  das Admin-Passwort der einzige Schutz dagegen.
 
 ## Empfehlung
 

@@ -8,11 +8,12 @@ _SCAN_CACHE_TTL_MS = 30000
 
 
 class WlanConnection:
-    def __init__(self, ssid, key, hostname, error_log=None):
+    def __init__(self, ssid, key, hostname, error_log=None, logging_settings=None):
         self.__ssid = ssid
         self.__key = key
         self.__hostname = hostname
         self._error_log = error_log
+        self._logging_settings = logging_settings
         self._scan_cache = None
         self._scan_cache_time = None
 
@@ -24,7 +25,7 @@ class WlanConnection:
         try:
             return WLAN(STA_IF).status('rssi')
         except Exception as exc:
-            record_exception(self._error_log, CATEGORY_NETWORK, exc)
+            record_exception(self._error_log, CATEGORY_NETWORK, exc, logging_settings=self._logging_settings)
             return None
 
     def scan_networks(self):
@@ -69,7 +70,7 @@ class WlanConnection:
             wlan.connect(self.__ssid, self.__key)
         except Exception as exc:
             print("offline")
-            record_exception(self._error_log, CATEGORY_NETWORK, exc)
+            record_exception(self._error_log, CATEGORY_NETWORK, exc, logging_settings=self._logging_settings)
             led_error_twinkle(22, 23, 200, 2)
             return False
 
@@ -107,4 +108,4 @@ class WlanConnection:
             print("Local time after synchronization： %s " % str(time.gmtime()))
         except Exception as exc:
             print("NTP sync failed:", exc)
-            record_exception(self._error_log, CATEGORY_NETWORK, exc)
+            record_exception(self._error_log, CATEGORY_NETWORK, exc, logging_settings=self._logging_settings)

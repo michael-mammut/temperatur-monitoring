@@ -55,7 +55,12 @@ und beim Deployen selbst ebenfalls einen `MemoryError`, weil größere
 Dateien bisher als ein einziger Base64-Block statt in kleinen Chunks
 übertragen wurden. Außerdem eine Telegram-Warnung, wenn freier RAM oder
 Flash unter einen konfigurierbaren Prozentsatz fällt
-(`Monitoring/config.py`, zusätzlich über `/settings` änderbar).
+(`Monitoring/config.py`, zusätzlich über `/settings` änderbar). Dazu:
+Fehlerprotokollierung je Kategorie über `/settings` abschaltbar
+(`WebServer/loggingsettings.py`), ein Flash-Anteil-Deckel für Fehler- +
+Benachrichtigungs-Log zusammen (`enforce_storage_budget()`, Default 15 %,
+ebenfalls über `/settings` änderbar) sowie ein Formular auf
+`/statistics`, um Log-Einträge älter als X Minuten manuell zu löschen.
 
 ## Wie KI in diesem Projekt eingesetzt wird
 
@@ -88,20 +93,21 @@ echte Hardware zu benötigen.
 
 | Testdatei | Anzahl Tests | Prüft |
 |---|---|---|
-| [test_main.py](tests/test_main.py) | 14 | Hauptschleife: Watchdog-Fütterung, Fehlerisolierung pro Durchlauf, Sensor-Wiederverwendung, Verdrahtung der Web-Oberfläche und der Logs, RAM-/Flash-Warnschwellen |
+| [test_main.py](tests/test_main.py) | 17 | Hauptschleife: Watchdog-Fütterung, Fehlerisolierung pro Durchlauf, Sensor-Wiederverwendung, Verdrahtung der Web-Oberfläche und der Logs, RAM-/Flash-Warnschwellen, Log-Speicher-Deckel |
 | [test_telegram.py](tests/test_telegram.py) | 11 | Telegram-Versand: Response-Schließung, UTF-8-Byte-Kodierung, Benachrichtigungs-Timing, Fehler-/Benachrichtigungs-Protokoll |
 | [test_temperature.py](tests/test_temperature.py) | 6 | Sensor-Mittelwertbildung, Absturzsicherheit bei Lesefehlern, Fehlerprotokollierung |
 | [test_wlanconnection.py](tests/test_wlanconnection.py) | 12 | WLAN-Verbindung, DHCP-Hostname, NTP-Zeitsync-Retry, Netzwerk-Scan (inkl. 30s-Cache), Signalstärke, Fehlerprotokollierung |
 | [test_settings.py](tests/test_settings.py) | 3 | Persistenz des Aquarium-Namens über Neustarts |
 | [test_wifisettings.py](tests/test_wifisettings.py) | 11 | Persistenz + Validierung der WLAN-Zugangsdaten (SSID-/Passwort-Längen nach 802.11/WPA2-Spezifikation) |
-| [test_statusserver.py](tests/test_statusserver.py) | 29 | HTTP-Server: Routing, HTTP-Basic-Auth, HTML-Escaping (XSS), Request-Size-Limit, Statistik-Seite (inkl. Zeilenbegrenzung gegen MemoryError), Warnschwellen-Formular, echte Socket-Kommunikation über Loopback |
-| [test_eventlog.py](tests/test_eventlog.py) | 6 | Persistierter Event-Log: 30-Tage-Fenster, Begrenzung auf 200 Einträge |
-| [test_errorlog.py](tests/test_errorlog.py) | 3 | Exception → Fehlerkategorie/-code/-meldung |
+| [test_statusserver.py](tests/test_statusserver.py) | 39 | HTTP-Server: Routing, HTTP-Basic-Auth, HTML-Escaping (XSS), Request-Size-Limit, Statistik-Seite (inkl. Zeilenbegrenzung gegen MemoryError), Warnschwellen-Formular, Protokollierungs-Checkboxen, Logs-löschen-Formular, echte Socket-Kommunikation über Loopback |
+| [test_eventlog.py](tests/test_eventlog.py) | 14 | Persistierter Event-Log: 30-Tage-Fenster, Begrenzung auf 200 Einträge, Dateigröße, Alters-basiertes Löschen, Speicher-Budget-Durchsetzung |
+| [test_errorlog.py](tests/test_errorlog.py) | 6 | Exception → Fehlerkategorie/-code/-meldung, Ein-/Ausschalten je Kategorie |
+| [test_loggingsettings.py](tests/test_loggingsettings.py) | 4 | Persistenz der Protokollierungs-Ein/Aus-Schalter je Kategorie |
 | [test_loginlog.py](tests/test_loginlog.py) | 3 | Login-Zeitpunkt-Persistenz, Rückgabe des *vorherigen* Logins |
 | [test_systemstats.py](tests/test_systemstats.py) | 2 | RAM-/Flash-Belegung (`used + free == total`) |
-| [test_monitoringsettings.py](tests/test_monitoringsettings.py) | 7 | Persistenz + Validierung der RAM-/Flash-Warnschwellen (5–50 %) |
+| [test_monitoringsettings.py](tests/test_monitoringsettings.py) | 7 | Persistenz + Validierung der RAM-/Flash-/Log-Speicher-Warnschwellen (5–50 %) |
 
-**Gesamt: 107 Tests**, Stand des letzten vollständigen Durchlaufs in diesem
+**Gesamt: 135 Tests**, Stand des letzten vollständigen Durchlaufs in diesem
 Dokument. Viele Tests sind als Regressionstests für konkret auf der
 Hardware beobachtete Bugs angelegt (siehe Docstrings in den jeweiligen
 Testdateien) — sie beschreiben bewusst, *welches reale Problem* sie

@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import micropython_mocks
 micropython_mocks.install()
 
-from WebServer.eventlog import EventLog
+from WebServer.eventlog import EventLog, enforce_storage_budget
 
 
 class EventLogTests(unittest.TestCase):
@@ -65,6 +65,134 @@ class EventLogTests(unittest.TestCase):
 
         reloaded = EventLog('events.json')
         self.assertLessEqual(len(reloaded.entries_within(10 ** 12)), 200)
+
+
+class FileSizeTests(unittest.TestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._cwd = os.getcwd()
+        os.chdir(self._tmpdir.name)
+        self.addCleanup(self._restore_cwd)
+
+    def _restore_cwd(self):
+        os.chdir(self._cwd)
+        self._tmpdir.cleanup()
+
+    def test_empty_log_has_zero_size(self):
+        log = EventLog('events.json')
+        self.assertEqual(log.file_size(), 0)
+
+    def test_size_grows_after_recording(self):
+        log = EventLog('events.json')
+        log.record({'code': 'X', 'message': 'something happened'})
+        self.assertGreater(log.file_size(), 0)
+
+
+class DeleteOlderThanTests(unittest.TestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._cwd = os.getcwd()
+        os.chdir(self._tmpdir.name)
+        self.addCleanup(self._restore_cwd)
+
+    def _restore_cwd(self):
+        os.chdir(self._cwd)
+        self._tmpdir.cleanup()
+
+    def test_removes_only_entries_older_than_given_seconds(self):
+        log = EventLog('events.json')
+        with patch("WebServer.eventlog.time.time", return_value=1000.0):
+            log.record({'code': 'old'})
+        with patch("WebServer.eventlog.time.time", return_value=1000.0 + 3600):
+            log.record({'code': 'recent'})
+            removed = log.delete_older_than(1800)  # 30 minutes
+
+        self.assertEqual(removed, 1)
+        remaining = log.entries_within(10 ** 12)
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0]['code'], 'recent')
+
+    def test_persists_the_deletion(self):
+        log = EventLog('events.json')
+        with patch("WebServer.eventlog.time.time", return_value=1000.0):
+            log.record({'code': 'old'})
+        with patch("WebServer.eventlog.time.time", return_value=1000.0 + 3600):
+            log.delete_older_than(1800)
+
+        reloaded = EventLog('events.json')
+        self.assertEqual(reloaded.count_within(10 ** 12), 0)
+
+    def test_nothing_removed_returns_zero(self):
+        log = EventLog('events.json')
+        log.record({'code': 'fresh'})
+        self.assertEqual(log.delete_older_than(10 ** 9), 0)
+
+
+class EnforceStorageBudgetTests(unittest.TestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._cwd = os.getcwd()
+        os.chdir(self._tmpdir.name)
+        self.addCleanup(self._restore_cwd)
+
+    def _restore_cwd(self):
+        os.chdir(self._cwd)
+        self._tmpdir.cleanup()
+
+    def test_does_nothing_when_under_budget(self):
+        log = EventLog('events.json')
+        log.record({'code': 'X'})
+        size_before = log.file_size()
+
+        enforce_storage_budget([log], max_percent=50, total_storage_bytes=10 ** 9)
+
+        self.assertEqual(log.file_size(), size_before)
+
+    def test_trims_oldest_entries_when_over_budget(self):
+        """Regression target: 'logs should take up at most N% of total
+        flash' - a log that grew past its budget must shrink, oldest
+        entries first, until it fits again."""
+        log = EventLog('events.json')
+        for i in range(50):
+            log.record({'code': str(i), 'message': 'padding' * 5})
+
+        # Budget set (from the actually measured size) to roughly half the
+        # current size, forcing meaningful but not complete trimming.
+        size_before = log.file_size()
+        total_storage_bytes = size_before * 10
+        max_percent = 5  # budget = total_storage_bytes * 0.05 = size_before / 2
+
+        enforce_storage_budget([log], max_percent=max_percent, total_storage_bytes=total_storage_bytes)
+
+        remaining = log.entries_within(10 ** 12)
+        self.assertGreater(len(remaining), 0)
+        self.assertLess(len(remaining), 50)
+        # newest entries must survive, oldest got dropped
+        self.assertEqual(remaining[-1]['code'], '49')
+
+    def test_largest_log_is_trimmed_first_across_several_logs(self):
+        small_log = EventLog('small.json')
+        small_log.record({'code': 'only-one'})
+
+        big_log = EventLog('big.json')
+        for i in range(50):
+            big_log.record({'code': str(i), 'message': 'padding' * 5})
+
+        # Pick a budget that is only slightly below the combined size, so
+        # trimming a couple of entries off the big log alone covers it -
+        # computed from the actually measured sizes rather than a guessed
+        # byte count, so this doesn't depend on exact JSON overhead.
+        combined = small_log.file_size() + big_log.file_size()
+        total_storage_bytes = combined * 100
+        desired_overshoot = 50
+        max_percent = (combined - desired_overshoot) / total_storage_bytes * 100
+
+        enforce_storage_budget([small_log, big_log], max_percent=max_percent, total_storage_bytes=total_storage_bytes)
+
+        # the small log should be left alone since trimming the big one a
+        # little is enough to get under budget
+        self.assertEqual(small_log.count_within(10 ** 12), 1)
+        self.assertLess(big_log.count_within(10 ** 12), 50)
 
 
 if __name__ == "__main__":

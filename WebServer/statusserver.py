@@ -2,7 +2,7 @@ import socket
 import time
 import ubinascii
 
-from WebServer.errorlog import CATEGORY_EXTERNAL_API, CATEGORY_HARDWARE, CATEGORY_NETWORK, CATEGORY_SYSTEM, CATEGORY_LABELS
+from WebServer.errorlog import ALL_CATEGORIES, CATEGORY_LABELS, CATEGORY_SYSTEM
 from WebServer.systemstats import format_bytes, get_memory_stats, get_storage_stats
 
 # Hard cap on how much of a request we ever read into memory. This alone
@@ -15,7 +15,7 @@ _THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60
 
 _PROTECTED_PATHS = ('/settings', '/wifi-settings', '/statistics')
 
-_CHART_CATEGORIES = (CATEGORY_SYSTEM, CATEGORY_HARDWARE, CATEGORY_NETWORK, CATEGORY_EXTERNAL_API)
+_CHART_CATEGORIES = ALL_CATEGORIES
 
 # Rendering more rows than this in one go risks a MemoryError from heap
 # fragmentation on the ESP32 (see _render_error_table).
@@ -24,7 +24,8 @@ _MAX_DISPLAYED_ERRORS = 20
 
 class StatusServer:
     def __init__(self, port, settings, wifi_settings, admin_password, reset_callback,
-                 error_log=None, notification_log=None, login_log=None, monitoring_settings=None):
+                 error_log=None, notification_log=None, login_log=None, monitoring_settings=None,
+                 logging_settings=None):
         self._settings = settings
         self._wifi_settings = wifi_settings
         self._admin_password = admin_password
@@ -33,6 +34,7 @@ class StatusServer:
         self._notification_log = notification_log
         self._login_log = login_log
         self._monitoring_settings = monitoring_settings
+        self._logging_settings = logging_settings
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._socket.bind(('0.0.0.0', port))
@@ -65,6 +67,9 @@ class StatusServer:
             elif path == '/wifi-settings':
                 self._record_login()
                 response = self._html_response(self.render_wifi_settings(monitor))
+            elif path == '/statistics' and method == 'POST':
+                previous_login = self._record_login()
+                response = self._html_response(self._handle_statistics_post(monitor, body, previous_login))
             elif path == '/statistics':
                 previous_login = self._record_login()
                 response = self._html_response(self.render_statistics(monitor, previous_login))
@@ -88,14 +93,16 @@ class StatusServer:
 
     def _handle_settings_post(self, monitor, body):
         name = self._parse_form_field(body, 'name')
-        ram_value = storage_value = None
+        ram_value = storage_value = log_storage_value = None
         error = None
 
         if self._monitoring_settings is not None:
             from Monitoring.settings import validate_percent
             ram_error, ram_value = validate_percent(self._parse_form_field(body, 'ram_percent'))
             storage_error, storage_value = validate_percent(self._parse_form_field(body, 'storage_percent'))
-            error = ram_error or storage_error
+            log_storage_error, log_storage_value = validate_percent(
+                self._parse_form_field(body, 'log_storage_percent'))
+            error = ram_error or storage_error or log_storage_error
 
         if not error:
             if name and name.strip():
@@ -103,7 +110,13 @@ class StatusServer:
                 self._settings.set_name(name)
                 monitor.telegram.set_project_name(name)
             if self._monitoring_settings is not None:
-                self._monitoring_settings.set_thresholds(ram_value, storage_value)
+                self._monitoring_settings.set_thresholds(ram_value, storage_value, log_storage_value)
+            if self._logging_settings is not None:
+                enabled_by_category = {
+                    category: self._parse_form_field(body, 'log_' + category) is not None
+                    for category in ALL_CATEGORIES
+                }
+                self._logging_settings.set_enabled(enabled_by_category)
 
         return self.render_settings(saved=(error is None), error=error)
 
@@ -167,11 +180,25 @@ class StatusServer:
                 '<input type="number" name="ram_percent" value="{ram}" min="{min}" max="{max}"></label><br>\n'
                 '<label>Flash-Warnschwelle (% frei): '
                 '<input type="number" name="storage_percent" value="{storage}" min="{min}" max="{max}"></label><br>\n'
+                '<label>Log-Speicher-Deckel (% vom Flash): '
+                '<input type="number" name="log_storage_percent" value="{log_storage}" min="{min}" max="{max}">'
+                '</label><br>\n'
             ).format(
                 ram=self._monitoring_settings.get_ram_percent(),
                 storage=self._monitoring_settings.get_storage_percent(),
+                log_storage=self._monitoring_settings.get_log_storage_percent(),
                 min=MIN_WARNING_PERCENT, max=MAX_WARNING_PERCENT,
             )
+
+        logging_fields = ''
+        if self._logging_settings is not None:
+            checkboxes = []
+            for category in ALL_CATEGORIES:
+                checked = ' checked' if self._logging_settings.is_enabled(category) else ''
+                checkboxes.append(
+                    '<label><input type="checkbox" name="log_{cat}" value="1"{checked}> {label}</label><br>'.format(
+                        cat=category, checked=checked, label=self._escape_html(CATEGORY_LABELS[category])))
+            logging_fields = '<p>Fehlerprotokollierung:</p>\n' + '\n'.join(checkboxes)
 
         return """<!DOCTYPE html>
 <html>
@@ -185,12 +212,13 @@ class StatusServer:
 <form method="POST" action="/settings">
 <label>Aquarium-Name: <input type="text" name="name" value="{name}" maxlength="64"></label><br>
 {monitoring_fields}
+{logging_fields}
 <button type="submit">Speichern</button>
 </form>
 <p><a href="/">Status</a> | <a href="/wifi-settings">WLAN</a> | <a href="/statistics">Statistik</a></p>
 </body>
 </html>
-""".format(message=message, name=name, monitoring_fields=monitoring_fields)
+""".format(message=message, name=name, monitoring_fields=monitoring_fields, logging_fields=logging_fields)
 
     def render_wifi_settings(self, monitor, saved=False, error=None, ssid=None):
         current_ssid = self._escape_html(self._wifi_settings.get_ssid())
@@ -226,7 +254,24 @@ class StatusServer:
 </html>
 """.format(current_ssid=current_ssid, options=options, message=message)
 
-    def render_statistics(self, monitor, previous_login):
+    def _handle_statistics_post(self, monitor, body, previous_login):
+        minutes_raw = self._parse_form_field(body, 'minutes')
+        try:
+            minutes = float(minutes_raw)
+            if minutes <= 0:
+                raise ValueError("must be positive")
+        except (TypeError, ValueError):
+            message = 'Ungültige Angabe - bitte eine positive Zahl eingeben.'
+        else:
+            removed = 0
+            if self._error_log is not None:
+                removed += self._error_log.delete_older_than(minutes * 60)
+            if self._notification_log is not None:
+                removed += self._notification_log.delete_older_than(minutes * 60)
+            message = '{} Log-Einträge gelöscht (älter als {:g} Minuten).'.format(removed, minutes)
+        return self.render_statistics(monitor, previous_login, message=message)
+
+    def render_statistics(self, monitor, previous_login, message=None):
         memory = get_memory_stats()
         try:
             storage = get_storage_stats()
@@ -240,6 +285,8 @@ class StatusServer:
         counts_by_category = self._error_counts_by_category()
         chart = self._render_error_chart(counts_by_category)
         error_rows = self._render_error_table()
+        log_storage = self._format_log_storage(storage)
+        message_html = '<p>{}</p>'.format(self._escape_html(message)) if message else ''
 
         return """<!DOCTYPE html>
 <html>
@@ -256,6 +303,7 @@ class StatusServer:
 
 <h2>Speicher (Flash)</h2>
 <p>{storage}</p>
+<p>Logs: {log_storage}</p>
 
 <h2>Zugriff</h2>
 <p>Letzter Login: {last_login}</p>
@@ -271,6 +319,13 @@ class StatusServer:
 {error_rows}
 </table>
 
+<h2>Logs bereinigen</h2>
+{message_html}
+<form method="POST" action="/statistics">
+<label>Lösche Log-Einträge älter als <input type="number" name="minutes" value="60" min="1" step="1"> Minuten</label>
+<button type="submit">Löschen</button>
+</form>
+
 <p><a href="/">Status</a> | <a href="/settings">Einstellungen</a> | <a href="/wifi-settings">WLAN</a></p>
 </body>
 </html>
@@ -279,12 +334,26 @@ class StatusServer:
             mem_free=format_bytes(memory['free']),
             mem_total=format_bytes(memory['total']),
             storage=self._format_storage(storage),
+            log_storage=log_storage,
             last_login=self._format_login_time(previous_login),
             rssi=self._format_rssi(rssi),
             notification_count=notification_count,
             chart=chart,
             error_rows=error_rows,
+            message_html=message_html,
         )
+
+    def _format_log_storage(self, storage):
+        used = 0
+        if self._error_log is not None:
+            used += self._error_log.file_size()
+        if self._notification_log is not None:
+            used += self._notification_log.file_size()
+        if storage is None or self._monitoring_settings is None:
+            return format_bytes(used)
+        budget_percent = self._monitoring_settings.get_log_storage_percent()
+        budget_bytes = storage['total'] * budget_percent / 100
+        return '{} von {} ({:.0f}% Deckel)'.format(format_bytes(used), format_bytes(budget_bytes), budget_percent)
 
     def _error_counts_by_category(self):
         counts = {}

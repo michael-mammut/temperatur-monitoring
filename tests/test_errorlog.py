@@ -33,6 +33,36 @@ class RecordExceptionTests(unittest.TestCase):
         recorded = fake_log.record.call_args[0][0]
         self.assertLessEqual(len(recorded['message']), 200)
 
+    def test_disabled_category_is_not_recorded(self):
+        fake_log = MagicMock()
+        fake_logging_settings = MagicMock()
+        fake_logging_settings.is_enabled.return_value = False
+
+        record_exception(fake_log, CATEGORY_HARDWARE, ValueError("sensor missing"),
+                          logging_settings=fake_logging_settings)
+
+        fake_logging_settings.is_enabled.assert_called_once_with(CATEGORY_HARDWARE)
+        fake_log.record.assert_not_called()
+
+    def test_enabled_category_is_recorded(self):
+        fake_log = MagicMock()
+        fake_logging_settings = MagicMock()
+        fake_logging_settings.is_enabled.return_value = True
+
+        record_exception(fake_log, CATEGORY_HARDWARE, ValueError("sensor missing"),
+                          logging_settings=fake_logging_settings)
+
+        fake_log.record.assert_called_once()
+
+    def test_no_logging_settings_means_always_recorded(self):
+        """Backward compatible: callers that don't pass logging_settings
+        (e.g. existing code before this feature) must keep working exactly
+        as before - everything gets recorded."""
+        fake_log = MagicMock()
+        record_exception(fake_log, CATEGORY_HARDWARE, ValueError("sensor missing"))
+
+        fake_log.record.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

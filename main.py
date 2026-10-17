@@ -18,9 +18,10 @@ from Monitoring.settings import MonitoringSettings
 from Monitoring import config as monitoring_config
 from WebServer.statusserver import StatusServer
 from WebServer.settings import Settings
-from WebServer.eventlog import EventLog
+from WebServer.eventlog import EventLog, enforce_storage_budget
 from WebServer.loginlog import LoginLog
 from WebServer.errorlog import CATEGORY_SYSTEM, record_exception
+from WebServer.loggingsettings import LoggingSettings
 from WebServer.systemstats import format_bytes, free_percent, get_memory_stats, get_storage_stats
 from WebServer import config as webserver_config
 import config as project_config
@@ -38,18 +39,23 @@ class AquariumMonitor:
         self.error_log = EventLog('error_log.json')
         self.notification_log = EventLog('notification_log.json')
         self.login_log = LoginLog()
+        self.logging_settings = LoggingSettings()
         self.monitoring_settings = MonitoringSettings(
-            monitoring_config.RAM_FREE_WARNING_PERCENT, monitoring_config.STORAGE_FREE_WARNING_PERCENT)
+            monitoring_config.RAM_FREE_WARNING_PERCENT, monitoring_config.STORAGE_FREE_WARNING_PERCENT,
+            monitoring_config.MAX_LOG_STORAGE_PERCENT)
 
         self.wifi_settings = WifiSettings(wlan_config.SSID, wlan_config.PASSWORD)
         self.wlan = WlanConnection(
             self.wifi_settings.get_ssid(), self.wifi_settings.get_password(), wlan_config.DHCP_HOSTNAME,
-            error_log=self.error_log)
+            error_log=self.error_log, logging_settings=self.logging_settings)
         self.settings = Settings(project_config.AQUARIUM_NAME)
         self.telegram = Telegram(
-            self.settings.get_name(), error_log=self.error_log, notification_log=self.notification_log)
-        self.ambient_sensor = Temperature(temperature_config.ONE_WIRE_GPIO_AMBIENT, error_log=self.error_log)
-        self.water_sensor = Temperature(temperature_config.ONE_WIRE_GPIO_WATER, error_log=self.error_log)
+            self.settings.get_name(), error_log=self.error_log, notification_log=self.notification_log,
+            logging_settings=self.logging_settings)
+        self.ambient_sensor = Temperature(
+            temperature_config.ONE_WIRE_GPIO_AMBIENT, error_log=self.error_log, logging_settings=self.logging_settings)
+        self.water_sensor = Temperature(
+            temperature_config.ONE_WIRE_GPIO_WATER, error_log=self.error_log, logging_settings=self.logging_settings)
 
         self.air_pump_state = False
         self.first_run = True
@@ -91,6 +97,8 @@ class AquariumMonitor:
         elif water_temperature < temperature_config.TEMPERATURE_MIN:
             self.pin_K2_12_volt_fan.on()
 
+        self._enforce_log_storage_budget()
+
         if self.wlan.isConnected() == True:
             self.message_send_counter = self.telegram.send_aquarium_notification(
                 ambient_temperature, water_temperature, self.first_run, self.message_send_counter)
@@ -98,6 +106,14 @@ class AquariumMonitor:
             self._check_resource_usage()
 
         led_twinkle(22, 75)
+
+    def _enforce_log_storage_budget(self):
+        try:
+            total_bytes = get_storage_stats()['total']
+        except Exception:
+            return
+        enforce_storage_budget(
+            [self.error_log, self.notification_log], self.monitoring_settings.get_log_storage_percent(), total_bytes)
 
     def _check_resource_usage(self):
         self._check_threshold(
@@ -135,6 +151,7 @@ def main():
         notification_log=monitor.notification_log,
         login_log=monitor.login_log,
         monitoring_settings=monitor.monitoring_settings,
+        logging_settings=monitor.logging_settings,
     )
     print("----- LOOP START ------")
     while True:
@@ -142,13 +159,13 @@ def main():
             monitor.run_iteration()
         except Exception as exc:
             print("Loop iteration failed:", exc)
-            record_exception(monitor.error_log, CATEGORY_SYSTEM, exc)
+            record_exception(monitor.error_log, CATEGORY_SYSTEM, exc, logging_settings=monitor.logging_settings)
             led_error_twinkle(22, 23, 150, 3)
         try:
             web_server.handle_requests(monitor)
         except Exception as exc:
             print("Web server failed:", exc)
-            record_exception(monitor.error_log, CATEGORY_SYSTEM, exc)
+            record_exception(monitor.error_log, CATEGORY_SYSTEM, exc, logging_settings=monitor.logging_settings)
         wdt.feed()
         time.sleep_ms(3000)
         gc.collect()

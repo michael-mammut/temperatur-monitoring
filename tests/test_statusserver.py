@@ -84,9 +84,10 @@ def _basic_auth_header(password, username="admin"):
 
 
 class _FakeMonitoringSettings:
-    def __init__(self, ram_percent=20, storage_percent=20):
+    def __init__(self, ram_percent=20, storage_percent=20, log_storage_percent=15):
         self._ram_percent = ram_percent
         self._storage_percent = storage_percent
+        self._log_storage_percent = log_storage_percent
         self.saved_thresholds = None
 
     def get_ram_percent(self):
@@ -95,14 +96,35 @@ class _FakeMonitoringSettings:
     def get_storage_percent(self):
         return self._storage_percent
 
-    def set_thresholds(self, ram_percent, storage_percent):
+    def get_log_storage_percent(self):
+        return self._log_storage_percent
+
+    def set_thresholds(self, ram_percent, storage_percent, log_storage_percent):
         self._ram_percent = ram_percent
         self._storage_percent = storage_percent
-        self.saved_thresholds = (ram_percent, storage_percent)
+        self._log_storage_percent = log_storage_percent
+        self.saved_thresholds = (ram_percent, storage_percent, log_storage_percent)
+
+
+class _FakeLoggingSettings:
+    def __init__(self, enabled=None):
+        from WebServer.errorlog import ALL_CATEGORIES
+        self._enabled = {category: True for category in ALL_CATEGORIES}
+        if enabled:
+            self._enabled.update(enabled)
+        self.saved_enabled = None
+
+    def is_enabled(self, category):
+        return self._enabled.get(category, True)
+
+    def set_enabled(self, enabled_by_category):
+        self._enabled.update(enabled_by_category)
+        self.saved_enabled = dict(enabled_by_category)
 
 
 def _new_server(settings=None, wifi_settings=None, admin_password=ADMIN_PASSWORD, reset_callback=None,
-                 error_log=None, notification_log=None, login_log=None, monitoring_settings=None):
+                 error_log=None, notification_log=None, login_log=None, monitoring_settings=None,
+                 logging_settings=None):
     return StatusServer(
         0,
         settings or _FakeSettings(),
@@ -113,6 +135,7 @@ def _new_server(settings=None, wifi_settings=None, admin_password=ADMIN_PASSWORD
         notification_log=notification_log,
         login_log=login_log,
         monitoring_settings=monitoring_settings,
+        logging_settings=logging_settings,
     )
 
 
@@ -303,7 +326,7 @@ class MonitoringThresholdsOnSettingsPageTests(unittest.TestCase):
         server = _new_server(settings=settings, monitoring_settings=monitoring_settings)
         server._test_monitor = _fake_monitor(name="Vorzimmer")
         try:
-            body = b"name=Wohnzimmer&ram_percent=15&storage_percent=10"
+            body = b"name=Wohnzimmer&ram_percent=15&storage_percent=10&log_storage_percent=12"
             request = (
                 "POST /settings HTTP/1.1\r\nHost: localhost\r\n"
                 "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n"
@@ -317,7 +340,7 @@ class MonitoringThresholdsOnSettingsPageTests(unittest.TestCase):
         self.assertIn("200 OK", response)
         self.assertIn("Gespeichert", response)
         self.assertEqual(settings.get_name(), "Wohnzimmer")
-        self.assertEqual(monitoring_settings.saved_thresholds, (15.0, 10.0))
+        self.assertEqual(monitoring_settings.saved_thresholds, (15.0, 10.0, 12.0))
 
     def test_post_settings_with_out_of_range_threshold_saves_nothing(self):
         """Regression target: validation failure must be atomic - a bad
@@ -327,7 +350,7 @@ class MonitoringThresholdsOnSettingsPageTests(unittest.TestCase):
         server = _new_server(settings=settings, monitoring_settings=monitoring_settings)
         server._test_monitor = _fake_monitor(name="Vorzimmer")
         try:
-            body = b"name=Wohnzimmer&ram_percent=99&storage_percent=20"
+            body = b"name=Wohnzimmer&ram_percent=99&storage_percent=20&log_storage_percent=15"
             request = (
                 "POST /settings HTTP/1.1\r\nHost: localhost\r\n"
                 "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n"
@@ -360,6 +383,93 @@ class MonitoringThresholdsOnSettingsPageTests(unittest.TestCase):
 
         self.assertIn("Fehler", response)
         self.assertIsNone(monitoring_settings.saved_thresholds)
+
+
+class LoggingSettingsOnSettingsPageTests(unittest.TestCase):
+    def test_get_settings_shows_checkboxes_reflecting_current_state(self):
+        from WebServer.errorlog import CATEGORY_HARDWARE
+        logging_settings = _FakeLoggingSettings(enabled={CATEGORY_HARDWARE: False})
+        server = _new_server(logging_settings=logging_settings)
+        server._test_monitor = _fake_monitor()
+        try:
+            request = (
+                "GET /settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
+            ).encode()
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        # hardware is disabled -> no "checked" on that checkbox
+        self.assertIn('name="log_hardware" value="1">', response)
+        # network stayed enabled -> "checked" present
+        self.assertIn('name="log_network" value="1" checked>', response)
+
+    def test_settings_page_without_logging_settings_omits_checkboxes(self):
+        server = _new_server(logging_settings=None)
+        server._test_monitor = _fake_monitor()
+        try:
+            request = (
+                "GET /settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
+            ).encode()
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertNotIn("log_hardware", response)
+
+    def test_post_settings_unchecking_a_category_disables_it(self):
+        """Regression target: HTML checkboxes send nothing at all when
+        unchecked - the handler must treat an absent field as "disabled",
+        not crash or silently keep the old value."""
+        from WebServer.errorlog import CATEGORY_EXTERNAL_API, CATEGORY_HARDWARE, CATEGORY_NETWORK, CATEGORY_SYSTEM
+        logging_settings = _FakeLoggingSettings()
+        server = _new_server(logging_settings=logging_settings)
+        server._test_monitor = _fake_monitor()
+        try:
+            # only log_network is checked; the other three are left out,
+            # exactly like a real browser submitting unchecked checkboxes
+            body = b"name=Vorzimmer&log_network=1"
+            request = (
+                "POST /settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n"
+                "Content-Type: application/x-www-form-urlencoded\r\n"
+                "Content-Length: " + str(len(body)) + "\r\n\r\n"
+            ).encode() + body
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("200 OK", response)
+        self.assertEqual(logging_settings.saved_enabled, {
+            CATEGORY_SYSTEM: False,
+            CATEGORY_HARDWARE: False,
+            CATEGORY_NETWORK: True,
+            CATEGORY_EXTERNAL_API: False,
+        })
+
+    def test_post_settings_with_validation_error_does_not_change_logging_settings(self):
+        """Atomic with the other /settings fields: an invalid threshold
+        must not let the logging checkboxes through either."""
+        monitoring_settings = _FakeMonitoringSettings()
+        logging_settings = _FakeLoggingSettings()
+        server = _new_server(monitoring_settings=monitoring_settings, logging_settings=logging_settings)
+        server._test_monitor = _fake_monitor()
+        try:
+            body = b"name=Vorzimmer&ram_percent=99&storage_percent=20"
+            request = (
+                "POST /settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n"
+                "Content-Type: application/x-www-form-urlencoded\r\n"
+                "Content-Length: " + str(len(body)) + "\r\n\r\n"
+            ).encode() + body
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("Fehler", response)
+        self.assertIsNone(logging_settings.saved_enabled)
 
 
 class WifiSettingsPageTests(unittest.TestCase):
@@ -499,6 +609,7 @@ class StatisticsPageTests(unittest.TestCase):
     def test_statistics_page_shows_memory_rssi_and_notification_count(self):
         notification_log = MagicMock()
         notification_log.count_within.return_value = 7
+        notification_log.file_size.return_value = 0
         server = _new_server(notification_log=notification_log)
         server._test_monitor = _fake_monitor(rssi=-42)
         try:
@@ -550,6 +661,7 @@ class StatisticsPageTests(unittest.TestCase):
 
     def test_statistics_page_shows_error_chart_and_table(self):
         error_log = MagicMock()
+        error_log.file_size.return_value = 0
         error_log.entries_within.return_value = [
             {'timestamp': 1700000000, 'category': 'hardware', 'code': 'OSError', 'message': 'sensor missing'},
             {'timestamp': 1700000100, 'category': 'network', 'code': 'OSError', 'message': 'no AP found'},
@@ -576,6 +688,7 @@ class StatisticsPageTests(unittest.TestCase):
         which failed with a MemoryError on the ESP32's fragmented heap even
         though gc.mem_free() reported plenty of *total* free memory."""
         error_log = MagicMock()
+        error_log.file_size.return_value = 0
         error_log.entries_within.return_value = [
             {'timestamp': 1700000000 + i, 'category': 'hardware', 'code': 'OSError', 'message': 'entry %d' % i}
             for i in range(150)
@@ -602,6 +715,7 @@ class StatisticsPageTests(unittest.TestCase):
         contains attacker-influenced data (e.g. a malformed response body
         echoed into an error message), it must not inject into the page."""
         error_log = MagicMock()
+        error_log.file_size.return_value = 0
         error_log.entries_within.return_value = [
             {'timestamp': 1700000000, 'category': 'network', 'code': 'OSError',
              'message': '<script>alert(1)</script>'},
@@ -622,6 +736,7 @@ class StatisticsPageTests(unittest.TestCase):
 
     def test_statistics_page_shows_no_errors_message_when_log_empty(self):
         error_log = MagicMock()
+        error_log.file_size.return_value = 0
         error_log.entries_within.return_value = []
         server = _new_server(error_log=error_log)
         server._test_monitor = _fake_monitor()
@@ -635,6 +750,133 @@ class StatisticsPageTests(unittest.TestCase):
             server._socket.close()
 
         self.assertIn("Keine Fehler", response)
+
+    def test_statistics_page_shows_log_storage_usage_against_budget(self):
+        error_log = MagicMock()
+        error_log.file_size.return_value = 1024
+        error_log.entries_within.return_value = []
+        notification_log = MagicMock()
+        notification_log.file_size.return_value = 0
+        notification_log.count_within.return_value = 0
+        monitoring_settings = _FakeMonitoringSettings(log_storage_percent=15)
+        server = _new_server(error_log=error_log, notification_log=notification_log,
+                              monitoring_settings=monitoring_settings)
+        server._test_monitor = _fake_monitor()
+        try:
+            request = (
+                "GET /statistics HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
+            ).encode()
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("1.0 KB", response)
+        self.assertIn("15% Deckel", response)
+
+    def test_get_statistics_shows_delete_logs_form(self):
+        server = _new_server()
+        server._test_monitor = _fake_monitor()
+        try:
+            request = (
+                "GET /statistics HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
+            ).encode()
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn('action="/statistics"', response)
+        self.assertIn('name="minutes"', response)
+
+    def test_post_statistics_deletes_log_entries_older_than_given_minutes(self):
+        error_log = MagicMock()
+        error_log.file_size.return_value = 0
+        error_log.entries_within.return_value = []
+        error_log.delete_older_than.return_value = 3
+        notification_log = MagicMock()
+        notification_log.file_size.return_value = 0
+        notification_log.count_within.return_value = 0
+        notification_log.delete_older_than.return_value = 2
+        server = _new_server(error_log=error_log, notification_log=notification_log)
+        server._test_monitor = _fake_monitor()
+        try:
+            body = b"minutes=60"
+            request = (
+                "POST /statistics HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n"
+                "Content-Type: application/x-www-form-urlencoded\r\n"
+                "Content-Length: " + str(len(body)) + "\r\n\r\n"
+            ).encode() + body
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("200 OK", response)
+        error_log.delete_older_than.assert_called_once_with(60 * 60)
+        notification_log.delete_older_than.assert_called_once_with(60 * 60)
+        self.assertIn("5 Log-Einträge gelöscht", response)
+
+    def test_post_statistics_without_auth_does_not_delete_anything(self):
+        error_log = MagicMock()
+        error_log.file_size.return_value = 0
+        server = _new_server(error_log=error_log)
+        server._test_monitor = _fake_monitor()
+        try:
+            body = b"minutes=60"
+            request = (
+                b"POST /statistics HTTP/1.1\r\nHost: localhost\r\n"
+                b"Content-Type: application/x-www-form-urlencoded\r\n"
+                b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body
+            )
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("401", response)
+        error_log.delete_older_than.assert_not_called()
+
+    def test_post_statistics_with_invalid_minutes_shows_error_and_deletes_nothing(self):
+        error_log = MagicMock()
+        error_log.file_size.return_value = 0
+        error_log.entries_within.return_value = []
+        server = _new_server(error_log=error_log)
+        server._test_monitor = _fake_monitor()
+        try:
+            body = b"minutes=abc"
+            request = (
+                "POST /statistics HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n"
+                "Content-Type: application/x-www-form-urlencoded\r\n"
+                "Content-Length: " + str(len(body)) + "\r\n\r\n"
+            ).encode() + body
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("Ungültige Angabe", response)
+        error_log.delete_older_than.assert_not_called()
+
+    def test_post_statistics_with_zero_minutes_is_rejected(self):
+        error_log = MagicMock()
+        error_log.file_size.return_value = 0
+        error_log.entries_within.return_value = []
+        server = _new_server(error_log=error_log)
+        server._test_monitor = _fake_monitor()
+        try:
+            body = b"minutes=0"
+            request = (
+                "POST /statistics HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n"
+                "Content-Type: application/x-www-form-urlencoded\r\n"
+                "Content-Length: " + str(len(body)) + "\r\n\r\n"
+            ).encode() + body
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("Ungültige Angabe", response)
+        error_log.delete_older_than.assert_not_called()
 
 
 class RequestSizeLimitTests(unittest.TestCase):

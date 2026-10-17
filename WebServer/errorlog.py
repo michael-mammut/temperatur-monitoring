@@ -3,6 +3,8 @@ CATEGORY_HARDWARE = 'hardware'
 CATEGORY_NETWORK = 'network'
 CATEGORY_EXTERNAL_API = 'external_api'
 
+ALL_CATEGORIES = (CATEGORY_SYSTEM, CATEGORY_HARDWARE, CATEGORY_NETWORK, CATEGORY_EXTERNAL_API)
+
 CATEGORY_LABELS = {
     CATEGORY_SYSTEM: 'System',
     CATEGORY_HARDWARE: 'Hardware',
@@ -11,12 +13,15 @@ CATEGORY_LABELS = {
 }
 
 
-def record_exception(error_log, category, exc):
+def record_exception(error_log, category, exc, logging_settings=None):
     """Records an exception with its type name as the error code, e.g.
     "OSError: [Errno 2] ENOENT" - a meaningful code without inventing a
     separate numbering scheme. No-op if error_log is None, so passing it
-    is entirely optional for every caller."""
+    is entirely optional for every caller. Also a no-op if logging for
+    this category has been switched off via /settings."""
     if error_log is None:
+        return
+    if logging_settings is not None and not logging_settings.is_enabled(category):
         return
     error_log.record({
         'category': category,

@@ -3,9 +3,10 @@ from WebServer.errorlog import CATEGORY_HARDWARE, record_exception
 import array, ds18x20, onewire, time
 
 class Temperature:
-    def __init__(self, gpio, error_log=None):
+    def __init__(self, gpio, error_log=None, logging_settings=None):
         self.__gpio = gpio
         self._error_log = error_log
+        self._logging_settings = logging_settings
 
     def readCurrentAverage(self):
         temperature_list = array.array('f', [])
@@ -19,7 +20,7 @@ class Temperature:
                 temperature_list.append(ds.read_temp(rom))
         except Exception as ow_exc:
             print(ow_exc)
-            record_exception(self._error_log, CATEGORY_HARDWARE, ow_exc)
+            record_exception(self._error_log, CATEGORY_HARDWARE, ow_exc, logging_settings=self._logging_settings)
 
         return self._averageTemperature(temperature_list)
 

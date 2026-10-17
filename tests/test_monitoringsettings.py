@@ -24,17 +24,19 @@ class MonitoringSettingsPersistenceTests(unittest.TestCase):
         self._tmpdir.cleanup()
 
     def test_uses_defaults_when_no_file_exists_yet(self):
-        settings = MonitoringSettings(20, 20)
+        settings = MonitoringSettings(20, 20, 15)
         self.assertEqual(settings.get_ram_percent(), 20)
         self.assertEqual(settings.get_storage_percent(), 20)
+        self.assertEqual(settings.get_log_storage_percent(), 15)
 
     def test_set_thresholds_persists_across_instances(self):
-        settings = MonitoringSettings(20, 20)
-        settings.set_thresholds(15, 10)
+        settings = MonitoringSettings(20, 20, 15)
+        settings.set_thresholds(15, 10, 12)
 
-        reloaded = MonitoringSettings(20, 20)  # simulates a reboot
+        reloaded = MonitoringSettings(20, 20, 15)  # simulates a reboot
         self.assertEqual(reloaded.get_ram_percent(), 15)
         self.assertEqual(reloaded.get_storage_percent(), 10)
+        self.assertEqual(reloaded.get_log_storage_percent(), 12)
 
 
 class ValidatePercentTests(unittest.TestCase):
