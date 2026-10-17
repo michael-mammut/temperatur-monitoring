@@ -1,3 +1,4 @@
+import ujson
 import urequests
 import time
 
@@ -15,12 +16,19 @@ class Telegram:
         if message == None:
             message = "-- no message --"
 
-        url = 'https://api.telegram.org/bot' + notification_config.BOT_TOKEN + '/sendMessage?chat_id=-' + notification_config.CHAT_ID + '&text=' + message
+        url = 'https://api.telegram.org/bot' + notification_config.BOT_TOKEN + '/sendMessage'
+        payload = {'chat_id': '-' + notification_config.CHAT_ID, 'text': message}
+        # urequests' json= kwarg sizes Content-Length by character count, not
+        # UTF-8 byte count, which truncates the request body (and silently
+        # drops chat_id) whenever the text contains multi-byte characters
+        # like "°". Encoding to bytes ourselves avoids that miscalculation.
+        body = ujson.dumps(payload).encode('utf-8')
         res = None
         try:
-            res = urequests.get(url=url)
+            res = urequests.post(url, data=body, headers={'Content-Type': 'application/json'})
             print(str(res.json()))
         except Exception as ow_exc:
+            print("Telegram notify failed:", ow_exc)
             led_error_twinkle(22, 23, 100, 5)
         finally:
             if res is not None:

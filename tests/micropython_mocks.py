@@ -5,6 +5,7 @@ tested under regular CPython.
 Call install() once before importing any project module that (transitively)
 imports one of these MicroPython modules.
 """
+import json
 import sys
 import time
 import types
@@ -79,7 +80,12 @@ def install():
     _install_module("onewire", OneWire=object)
     _install_module("ds18x20", DS18X20=object)
     _install_module("ntptime", settime=lambda: None)
-    _install_module("urequests", get=lambda **kwargs: None)
+    _install_module("urequests", get=lambda **kwargs: None, post=lambda *args, **kwargs: None)
+    # MicroPython's ujson.dumps does not escape non-ASCII characters to
+    # \uXXXX (unlike CPython's json.dumps default ensure_ascii=True) - it
+    # passes them through raw. Match that so UTF-8 byte-length bugs show up
+    # under test the same way they did on real hardware.
+    _install_module("ujson", dumps=lambda obj: json.dumps(obj, ensure_ascii=False), loads=json.loads)
 
     # MicroPython's time module has extra functions CPython's doesn't.
     if not hasattr(time, "sleep_ms"):
