@@ -21,7 +21,7 @@ def render(server, monitor):
 <p>Wassertemperatur: {water} &deg;C</p>
 <p>Umgebungstemperatur: {ambient} &deg;C</p>
 <p>Letzte Messung: {updated}</p>
-<p class="nav"><a href="/settings">Einstellungen</a> | <a href="/wifi-settings">WLAN</a> | <a href="/statistics">Statistik</a></p>
+<p class="nav"><a href="/settings">Einstellungen</a> | <a href="/wifi-settings">WLAN</a> | <a href="/datetime-settings">Datum/Zeit</a> | <a href="/statistics">Statistik</a></p>
 </div>
 </body>
 </html>
@@ -43,4 +43,5 @@ def _format_temperature(value):
 def _format_time(server, value):
     if value is None:
         return "n/a"
-    return format_datetime(value, server._current_culture(), server._current_utc_offset())
+    return format_datetime(value, server._current_culture(), server._current_utc_offset(),
+                            server._current_eu_summer_time())
