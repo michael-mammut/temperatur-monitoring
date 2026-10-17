@@ -1077,5 +1077,26 @@ class RequestSizeLimitTests(unittest.TestCase):
         self.assertTrue(response)  # server stayed alive and answered something
 
 
+class MemoryManagementTests(unittest.TestCase):
+    def test_handle_requests_collects_garbage_before_building_the_response(self):
+        """Regression target: on real hardware, rendering /settings (the
+        biggest page) failed with a MemoryError even with tens of KB of
+        free RAM - heap fragmentation, not a lack of total memory. gc.collect()
+        normally only runs *after* handle_requests() returns (main.py's loop),
+        so whatever the rest of the loop iteration fragmented since then is
+        still there when a request comes in - collecting right here, before
+        the heaviest allocation, is what actually fixes it."""
+        server = _new_server()
+        server._test_monitor = _fake_monitor()
+        try:
+            with patch("WebServer.webserver.gc.collect") as mock_collect:
+                request = b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"
+                _request(server, request)
+        finally:
+            server._socket.close()
+
+        mock_collect.assert_called()
+
+
 if __name__ == "__main__":
     unittest.main()

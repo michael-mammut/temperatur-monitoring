@@ -1,3 +1,4 @@
+import gc
 import socket
 import time
 import ubinascii
@@ -51,6 +52,18 @@ class WebServer:
         try:
             client.settimeout(2)
             method, path, headers, body = self._parse_request(client.recv(_MAX_REQUEST_BYTES))
+
+            # Rendering a page needs one contiguous allocation of a few KB
+            # for the final HTML string. main.py's own gc.collect() only
+            # runs *after* handle_requests() returns, so whatever the rest
+            # of the loop iteration (sensors, WLAN, Telegram) fragmented
+            # the heap with since then is still there - collecting here,
+            # right before the heaviest allocation, is what actually
+            # matters. Reproduced on real hardware: /settings (the biggest
+            # page) failed with MemoryError without this, even with tens
+            # of KB of total free RAM - a fragmentation problem, not a
+            # total-memory one.
+            gc.collect()
 
             if path in _PROTECTED_PATHS and not self._is_authorized(headers):
                 response = self._unauthorized_response()

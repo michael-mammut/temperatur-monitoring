@@ -70,7 +70,18 @@ wählbar über `/settings` nach Country/Culture (z. B. `17.10.2026
 ein fester, ebenfalls über `/settings` wählbarer UTC-Offset statt einer
 echten Zeitzone — eine vollständige IANA-Zeitzonendatenbank mit
 Sommerzeit-Regeln je Land wäre für den ESP32-Flash zu groß und könnte
-auf dem Gerät ohnehin nicht aktuell gehalten werden.
+auf dem Gerät ohnehin nicht aktuell gehalten werden. Dabei den großen
+`WebServer/statusserver.py` (704 Zeilen, fünf verschiedene
+Zuständigkeiten in einer Klasse) in einen schlanken HTTP-Kern
+(`WebServer/webserver.py`, Klasse `WebServer`) plus ein Modul je Seite
+unter `WebServer/pages/` aufgeteilt — reines Verschieben, keine
+Logikänderung, 176 Tests blieben unverändert grün. Dabei auf echter
+Hardware einen dritten `MemoryError` gefunden: `/settings` (die größte
+Seite) schlug beim Speichern fehl, weil `main.py`s `gc.collect()` erst
+*nach* `handle_requests()` läuft und die Fragmentierung aus dem Rest
+des Loop-Durchlaufs (Sensoren, WLAN, Telegram) beim Bearbeiten der
+nächsten Anfrage noch da war — behoben durch einen zusätzlichen
+`gc.collect()`-Aufruf direkt am Anfang von `handle_requests()`.
 
 ## Wie KI in diesem Projekt eingesetzt wird
 
@@ -109,7 +120,7 @@ echte Hardware zu benötigen.
 | [test_wlanconnection.py](tests/test_wlanconnection.py) | 12 | WLAN-Verbindung, DHCP-Hostname, NTP-Zeitsync-Retry, Netzwerk-Scan (inkl. 30s-Cache), Signalstärke, Fehlerprotokollierung |
 | [test_settings.py](tests/test_settings.py) | 3 | Persistenz des Aquarium-Namens über Neustarts |
 | [test_wifisettings.py](tests/test_wifisettings.py) | 11 | Persistenz + Validierung der WLAN-Zugangsdaten (SSID-/Passwort-Längen nach 802.11/WPA2-Spezifikation) |
-| [test_webserver.py](tests/test_webserver.py) | 47 | HTTP-Server: Routing, HTTP-Basic-Auth, HTML-Escaping (XSS), Request-Size-Limit, Statistik-Seite (inkl. Zeilenbegrenzung gegen MemoryError), Warnschwellen-Formular, Protokollierungs-Checkboxen, Logs-löschen-Formular, Datum-/Zeit-Format- + Zeitzonen-Auswahl (inkl. Tagesgrenzen-Übertrag), echte Socket-Kommunikation über Loopback |
+| [test_webserver.py](tests/test_webserver.py) | 48 | HTTP-Server: Routing, HTTP-Basic-Auth, HTML-Escaping (XSS), Request-Size-Limit, Statistik-Seite (inkl. Zeilenbegrenzung gegen MemoryError), Warnschwellen-Formular, Protokollierungs-Checkboxen, Logs-löschen-Formular, Datum-/Zeit-Format- + Zeitzonen-Auswahl (inkl. Tagesgrenzen-Übertrag), `gc.collect()` vor jeder Anfrage, echte Socket-Kommunikation über Loopback |
 | [test_eventlog.py](tests/test_eventlog.py) | 15 | Persistierter Event-Log: 30-Tage-Fenster, Begrenzung auf 200 Einträge, Dateigröße, Alters-basiertes Löschen, Speicher-Budget-Durchsetzung |
 | [test_errorlog.py](tests/test_errorlog.py) | 6 | Exception → Fehlerkategorie/-code/-meldung, Ein-/Ausschalten je Kategorie |
 | [test_loggingsettings.py](tests/test_loggingsettings.py) | 4 | Persistenz der Protokollierungs-Ein/Aus-Schalter je Kategorie |
@@ -119,7 +130,7 @@ echte Hardware zu benötigen.
 | [test_datetimeformat.py](tests/test_datetimeformat.py) | 25 | Datums-/Zeit-Formatierung je Country/Culture (Tag/Monat-Reihenfolge, 12h-/24h-Anzeige inkl. Mitternacht/Mittag), Fallback auf ISO 8601 bei unbekannter Culture, UTC-Offset-Verschiebung inkl. Tages-/Monats-/Jahres-/Schaltjahr-Übertrag, Halb-/Viertelstunden-Offsets |
 | [test_datetimesettings.py](tests/test_datetimesettings.py) | 7 | Persistenz + Validierung der gewählten Culture und des UTC-Offsets, Fallback bei veralteter/ungültiger gespeicherter Culture bzw. Offset |
 
-**Gesamt: 176 Tests**, Stand des letzten vollständigen Durchlaufs in diesem
+**Gesamt: 177 Tests**, Stand des letzten vollständigen Durchlaufs in diesem
 Dokument. Viele Tests sind als Regressionstests für konkret auf der
 Hardware beobachtete Bugs angelegt (siehe Docstrings in den jeweiligen
 Testdateien) — sie beschreiben bewusst, *welches reale Problem* sie
