@@ -334,28 +334,34 @@ Details zur Absicherung (Zugriffsschutz, Eingabevalidierung, bekannte Grenzen) s
    cp WebServer/config.example.py WebServer/config.py
    # in allen drei Dateien die Platzhalter durch echte Werte ersetzen
    ```
-5. **Dateien auf den ESP32 übertragen**, z. B. mit [`mpremote`](https://docs.micropython.org/en/latest/reference/mpremote.html) (`pip install mpremote`):
+5. **Benötigtes Tool installieren** — [pyserial](https://github.com/pyserial/pyserial):
    ```bash
-   PORT=/dev/cu.usbserial-0001   # unter macOS; unter Linux z. B. /dev/ttyUSB0
+   pip install pyserial
+   ```
+6. **Dateien auf den ESP32 übertragen** mit [scripts/deploy_esp32.py](scripts/deploy_esp32.py):
+   ```bash
+   # einmal den USB-Port herausfinden:
+   ls /dev/cu.usbserial*   # macOS
+   ls /dev/ttyUSB*         # Linux
 
-   mpremote connect $PORT fs cp boot.py :boot.py
-   mpremote connect $PORT fs cp config.py :config.py
-   mpremote connect $PORT fs cp main.py :main.py
-   for dir in Airpump GpioControl Notification Temperature WlanNetwork WebServer Monitoring; do
-     mpremote connect $PORT fs cp -r "$dir" :
-   done
+   python3 scripts/deploy_esp32.py                       # komplettes Projekt übertragen
+   python3 scripts/deploy_esp32.py WebServer/statusserver.py   # nur eine einzelne Datei
+   python3 scripts/deploy_esp32.py --port /dev/ttyUSB0    # falls der Port nicht /dev/cu.usbserial-0001 ist
    ```
-   `tests/`, `.github/`, `README.md`, `.gitignore` und `*.example.py` gehören **nicht** auf das Gerät.
-   > **Troubleshooting:** Meldet `mpremote` `could not enter raw repl`, steckt das Board meist gerade in einer Endlosschleife (z. B. WLAN-Verbindungsversuch). Befehl einfach erneut ausführen oder kurz die Reset-Taste am Board drücken — das ist ein bekannter Timing-Effekt beim automatischen Reset über die serielle Schnittstelle.
-6. **Board neu starten** (Reset-Taste oder Stromzyklus) und optional den seriellen Monitor beobachten:
+   Welche Dateien übertragen werden, steht in der `FILES`-Liste im Skript — `tests/`, `.github/`, `README.md`, `.gitignore` und `*.example.py` gehören bewusst **nicht** dazu, die bleiben auf dem Dev-Rechner.
+
+   Das Skript öffnet die Raw-REPL-Verbindung selbst und überträgt jede Datei in kleinen 512-Byte-Häppchen statt als ein großes Stück. Beides war nötig, nachdem sich in diesem Projekt zwei konkrete Probleme mit [`mpremote`](https://docs.micropython.org/en/latest/reference/mpremote.html) gezeigt hatten: Es scheiterte zuverlässig mit `could not enter raw repl`, wenn das Board gerade in einer Endlosschleife steckte (z. B. WLAN-Reconnect), und größere Dateien (ab ein paar KB) ließen sich gar nicht übertragen, weil die Übertragung als ein einziger Block eine einzige große, zusammenhängende Speicher-Allokation braucht, die auf dem ESP32 selbst direkt nach einem Neustart mit `MemoryError` fehlschlägt. Das Skript war die Lösung für beide Probleme — siehe Docstring in [scripts/deploy_esp32.py](scripts/deploy_esp32.py) für Details.
+
+   `mpremote` (`pip install mpremote`) ist trotzdem nützlich, um schnell in die laufende REPL zu schauen (serielle Konsole, `Strg+C`/`Strg+D` zum Unterbrechen/Neustarten):
    ```bash
-   mpremote connect $PORT
+   mpremote connect /dev/cu.usbserial-0001
    ```
-7. **Tests lokal ausführen** (reines `unittest`, keine zusätzlichen Abhängigkeiten):
+7. **Board neu starten** — passiert nach `deploy_esp32.py` bereits automatisch per Soft-Reset; sonst Reset-Taste oder Stromzyklus.
+8. **Tests lokal ausführen** (reines `unittest`, keine zusätzlichen Abhängigkeiten):
    ```bash
    python3 -m unittest discover -s tests -v
    ```
-8. **CI:** [.github/workflows/tests.yml](.github/workflows/tests.yml) führt dieselben Tests automatisch bei jedem `git push`/Pull Request aus (Ergebnis im GitHub-Tab „Actions“).
+9. **CI:** [.github/workflows/tests.yml](.github/workflows/tests.yml) führt dieselben Tests automatisch bei jedem `git push`/Pull Request aus (Ergebnis im GitHub-Tab „Actions“).
 
 ## Tests
 
