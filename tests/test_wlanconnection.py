@@ -12,6 +12,62 @@ micropython_mocks.install()
 from WlanNetwork.wlanconnection import WlanConnection
 
 
+class ScanNetworksTests(unittest.TestCase):
+    def test_decodes_bytes_ssids_and_deduplicates(self):
+        scan_results = [
+            (b"NetworkA", b"bssid1", 1, -50, 3, 0),
+            (b"NetworkB", b"bssid2", 6, -70, 3, 0),
+            (b"NetworkA", b"bssid3", 11, -80, 3, 0),  # same SSID, different AP
+        ]
+        with patch("WlanNetwork.wlanconnection.WLAN") as wlan_cls:
+            wlan_cls.return_value.scan.return_value = scan_results
+            wlan = WlanConnection("ssid", "key", "host")
+            ssids = wlan.scan_networks()
+
+        self.assertEqual(ssids, ["NetworkA", "NetworkB"])
+
+    def test_skips_hidden_networks_with_empty_ssid(self):
+        scan_results = [
+            (b"", b"bssid1", 1, -50, 3, 1),  # hidden network, empty SSID
+            (b"Visible", b"bssid2", 6, -70, 3, 0),
+        ]
+        with patch("WlanNetwork.wlanconnection.WLAN") as wlan_cls:
+            wlan_cls.return_value.scan.return_value = scan_results
+            wlan = WlanConnection("ssid", "key", "host")
+            ssids = wlan.scan_networks()
+
+        self.assertEqual(ssids, ["Visible"])
+
+    def test_result_is_cached_and_not_rescanned_within_the_ttl(self):
+        """Regression test: scanning while connected takes several seconds
+        on real hardware and blocks the whole main loop (close to the 15s
+        watchdog timeout). Repeated calls within the cache TTL must not
+        trigger another scan."""
+        scan_results = [(b"NetworkA", b"bssid1", 1, -50, 3, 0)]
+        with patch("WlanNetwork.wlanconnection.WLAN") as wlan_cls, \
+             patch("WlanNetwork.wlanconnection.time.ticks_ms", side_effect=[1000, 2000, 3000]):
+            wlan_cls.return_value.scan.return_value = scan_results
+            wlan = WlanConnection("ssid", "key", "host")
+
+            wlan.scan_networks()
+            wlan.scan_networks()
+            wlan.scan_networks()
+
+        self.assertEqual(wlan_cls.return_value.scan.call_count, 1)
+
+    def test_result_is_rescanned_after_the_ttl_expires(self):
+        scan_results = [(b"NetworkA", b"bssid1", 1, -50, 3, 0)]
+        with patch("WlanNetwork.wlanconnection.WLAN") as wlan_cls, \
+             patch("WlanNetwork.wlanconnection.time.ticks_ms", side_effect=[1000, 1000 + 30001]):
+            wlan_cls.return_value.scan.return_value = scan_results
+            wlan = WlanConnection("ssid", "key", "host")
+
+            wlan.scan_networks()
+            wlan.scan_networks()
+
+        self.assertEqual(wlan_cls.return_value.scan.call_count, 2)
+
+
 class ConnectHostnameTests(unittest.TestCase):
     def test_dhcp_hostname_is_set_before_connecting(self):
         """Regression test: wlan.config(dhcp_hostname=...) used to be

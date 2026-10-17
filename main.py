@@ -1,6 +1,7 @@
 import gc
 import time
 
+import machine
 from machine import WDT
 
 from Temperature import config as temperature_config
@@ -10,6 +11,7 @@ from GpioControl.LedControl import led_error_twinkle, led_twinkle
 from Notification.telegram import Telegram
 from Temperature.temperature import Temperature
 from WlanNetwork.wlanconnection import WlanConnection
+from WlanNetwork.wifisettings import WifiSettings
 from WlanNetwork import config as wlan_config
 from Airpump import config as air_pump_config
 from WebServer.statusserver import StatusServer
@@ -27,7 +29,8 @@ class AquariumMonitor:
         self.pin_K2_12_volt_fan = ActorControl(actor_config.ACTOR_GPIO_FAN)
         self.pin_K1_12_volt_wlan = ActorControl(actor_config.ACTOR_GPIO_WLAN)
 
-        self.wlan = WlanConnection(wlan_config.SSID, wlan_config.PASSWORD, wlan_config.DHCP_HOSTNAME)
+        self.wifi_settings = WifiSettings(wlan_config.SSID, wlan_config.PASSWORD)
+        self.wlan = WlanConnection(self.wifi_settings.get_ssid(), self.wifi_settings.get_password(), wlan_config.DHCP_HOSTNAME)
         self.settings = Settings(project_config.AQUARIUM_NAME)
         self.telegram = Telegram(self.settings.get_name())
         self.ambient_sensor = Temperature(temperature_config.ONE_WIRE_GPIO_AMBIENT)
@@ -83,7 +86,13 @@ def main():
     print("+++++ START ++++++")
     monitor = AquariumMonitor()
     wdt = WDT(timeout=WATCHDOG_TIMEOUT_MS)
-    web_server = StatusServer(webserver_config.PORT, monitor.settings)
+    web_server = StatusServer(
+        webserver_config.PORT,
+        monitor.settings,
+        monitor.wifi_settings,
+        webserver_config.ADMIN_PASSWORD,
+        reset_callback=machine.reset,
+    )
     print("----- LOOP START ------")
     while True:
         try:

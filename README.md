@@ -11,6 +11,8 @@ Project Captain-Nemo was born.
 
 Ein ESP32 überwacht Wasser- und Umgebungstemperatur eines Aquariums (via DS18B20-Sensoren), steuert darüber automatisch Lüfter und Luftpumpe per Relais, schickt zweimal täglich (und bei jedem Neustart) den aktuellen Status per Telegram, und versucht dauerhaft im Hintergrund eine WLAN-Verbindung aufrechtzuerhalten. Ein Hardware-Watchdog sorgt dafür, dass sich das Gerät selbst neu startet, falls die Firmware sich aufhängt.
 
+Projekt-Historie, Testsuite-Übersicht und Einsatz von KI-Unterstützung: [PROJECT.md](PROJECT.md). Sicherheitsaspekte der Web-Oberfläche: [SECURITY.md](SECURITY.md).
+
 ## Architektur
 
 ### Komponentenübersicht
@@ -73,6 +75,9 @@ flowchart TD
 | [WlanNetwork/wlanconnection.py](WlanNetwork/wlanconnection.py) | WLAN-Verbindungsaufbau inkl. NTP-Zeitsynchronisation |
 | [GpioControl/ActorControl.py](GpioControl/ActorControl.py) | Ein-/Ausschalten eines Relais-Kanals |
 | [GpioControl/LedControl.py](GpioControl/LedControl.py) | Status-/Fehler-LEDs blinken lassen |
+| [WebServer/statusserver.py](WebServer/statusserver.py) | HTTP-Server: Status-Seite (`/`), Einstellungen (`/settings`, `/wifi-settings`) |
+| [WebServer/settings.py](WebServer/settings.py) | Persistiert den Aquarium-Namen |
+| [WlanNetwork/wifisettings.py](WlanNetwork/wifisettings.py) | Persistiert WLAN-Zugangsdaten, die über `/wifi-settings` geändert wurden |
 | `*/config.py` | Je Modul eigene Konfiguration (siehe unten) |
 
 ## Konfigurationsparameter
@@ -107,6 +112,17 @@ cp Notification/config.example.py Notification/config.py
 |---|---|
 | `CHAT_ID` | Telegram-Chat/-Gruppe, an die Nachrichten gesendet werden |
 | `BOT_TOKEN` | Token des Telegram-Bots (von [@BotFather](https://t.me/BotFather)) |
+
+### `WebServer/config.py` ⚠️ enthält Secrets, nicht in Git
+
+```bash
+cp WebServer/config.example.py WebServer/config.py
+```
+
+| Parameter | Bedeutung |
+|---|---|
+| `PORT` | Port des HTTP-Servers (Standard 80) |
+| `ADMIN_PASSWORD` | Schützt `/settings` und `/wifi-settings` per HTTP Basic Auth — siehe [SECURITY.md](SECURITY.md) |
 
 ### `GpioControl/config.py`
 
@@ -149,6 +165,16 @@ cp Notification/config.example.py Notification/config.py
 |---|---|
 | `WATCHDOG_TIMEOUT_MS` | Zeit in Millisekunden, nach der der Watchdog ohne `feed()` einen Reset auslöst (aktuell 15000 = 15 s) |
 
+## Web-Oberfläche
+
+| URL | Zugriff | Zweck |
+|---|---|---|
+| `http://<IP>/` | öffentlich | Temperaturen, Online-Status, Zeitstempel der letzten Messung |
+| `http://<IP>/settings` | Admin-Passwort | Aquarium-Namen ändern |
+| `http://<IP>/wifi-settings` | Admin-Passwort | WLAN-Netzwerk per Dropdown wählen + neues Passwort setzen; speichert und startet das Gerät neu |
+
+Details zur Absicherung (Zugriffsschutz, Eingabevalidierung, bekannte Grenzen) stehen in [SECURITY.md](SECURITY.md).
+
 ## Setup — Schritt für Schritt
 
 1. **Hardware verkabeln** gemäß der GPIO-Tabelle oben (2× DS18B20 mit Pull-up-Widerstand ~4,7 kΩ am Datenpin, 4-Kanal-Relais-Modul, 2 LEDs mit Vorwiderstand an GPIO 22/23).
@@ -159,7 +185,8 @@ cp Notification/config.example.py Notification/config.py
    ```bash
    cp WlanNetwork/config.example.py WlanNetwork/config.py
    cp Notification/config.example.py Notification/config.py
-   # in beiden Dateien die Platzhalter durch echte Werte ersetzen
+   cp WebServer/config.example.py WebServer/config.py
+   # in allen drei Dateien die Platzhalter durch echte Werte ersetzen
    ```
 5. **Dateien auf den ESP32 übertragen**, z. B. mit [`mpremote`](https://docs.micropython.org/en/latest/reference/mpremote.html) (`pip install mpremote`):
    ```bash
@@ -168,7 +195,7 @@ cp Notification/config.example.py Notification/config.py
    mpremote connect $PORT fs cp boot.py :boot.py
    mpremote connect $PORT fs cp config.py :config.py
    mpremote connect $PORT fs cp main.py :main.py
-   for dir in Airpump GpioControl Notification Temperature WlanNetwork; do
+   for dir in Airpump GpioControl Notification Temperature WlanNetwork WebServer; do
      mpremote connect $PORT fs cp -r "$dir" :
    done
    ```

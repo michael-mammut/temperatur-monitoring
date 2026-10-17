@@ -1,6 +1,7 @@
 # Sensible Konfigurationsdateien mit echten Zugangsdaten
 WlanNetwork/config.py
 Notification/config.py
+WebServer/config.py
 
 # Python
 __pycache__/

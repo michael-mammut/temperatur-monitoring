@@ -3,15 +3,44 @@ from GpioControl.LedControl import led_twinkle, led_error_twinkle
 import machine, ntptime, time
 
 
+_SCAN_CACHE_TTL_MS = 30000
+
+
 class WlanConnection:
     def __init__(self, ssid, key, hostname):
         self.__ssid = ssid
         self.__key = key
         self.__hostname = hostname
+        self._scan_cache = None
+        self._scan_cache_time = None
 
     def isConnected(self):
         wlan = WLAN(STA_IF)
         return wlan.isconnected()
+
+    def scan_networks(self):
+        # Scanning while associated to an AP takes several seconds (it has
+        # to briefly leave the connected channel to probe others) - that's
+        # uncomfortably close to the watchdog timeout and blocks the whole
+        # main loop meanwhile. Caching means repeated page loads only pay
+        # that cost once every 30s instead of on every single request.
+        now = time.ticks_ms()
+        if self._scan_cache is not None and time.ticks_diff(now, self._scan_cache_time) < _SCAN_CACHE_TTL_MS:
+            return self._scan_cache
+
+        wlan = WLAN(STA_IF)
+        wlan.active(True)
+        ssids = []
+        for entry in wlan.scan():
+            ssid = entry[0]
+            if isinstance(ssid, bytes):
+                ssid = ssid.decode('utf-8', 'ignore')
+            if ssid and ssid not in ssids:
+                ssids.append(ssid)
+
+        self._scan_cache = ssids
+        self._scan_cache_time = now
+        return ssids
 
     def connect(self):
         if self.isConnected() == True:

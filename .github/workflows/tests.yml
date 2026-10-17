@@ -16,5 +16,6 @@ jobs:
         run: |
           cp WlanNetwork/config.example.py WlanNetwork/config.py
           cp Notification/config.example.py Notification/config.py
+          cp WebServer/config.example.py WebServer/config.py
       - name: Run unit tests
         run: python3 -m unittest discover -s tests -v

@@ -5,6 +5,7 @@ tested under regular CPython.
 Call install() once before importing any project module that (transitively)
 imports one of these MicroPython modules.
 """
+import base64
 import json
 import sys
 import time
@@ -61,6 +62,9 @@ class FakeWLAN:
     def config(self, *args, **kwargs):
         return ""
 
+    def scan(self):
+        return []
+
 
 def _install_module(name, **attrs):
     if name in sys.modules:
@@ -75,7 +79,8 @@ def _install_module(name, **attrs):
 
 def install():
     """Idempotent: safe to call from every test module."""
-    _install_module("machine", Pin=FakePin, WDT=FakeWDT, idle=lambda: None)
+    _install_module("machine", Pin=FakePin, WDT=FakeWDT, idle=lambda: None, reset=lambda: None)
+    _install_module("ubinascii", a2b_base64=base64.b64decode, b2a_base64=base64.b64encode)
     _install_module("network", WLAN=FakeWLAN, STA_IF="STA_IF")
     _install_module("onewire", OneWire=object)
     _install_module("ds18x20", DS18X20=object)
@@ -96,3 +101,7 @@ def install():
     # MicroPython's time module has extra functions CPython's doesn't.
     if not hasattr(time, "sleep_ms"):
         time.sleep_ms = lambda ms: None
+    if not hasattr(time, "ticks_ms"):
+        time.ticks_ms = lambda: int(time.monotonic() * 1000)
+    if not hasattr(time, "ticks_diff"):
+        time.ticks_diff = lambda a, b: a - b

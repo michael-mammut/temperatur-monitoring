@@ -120,6 +120,31 @@ class MainLoopWatchdogTests(unittest.TestCase):
         web_server = main.StatusServer.return_value
         self.assertEqual(web_server.handle_requests.call_count, 3)
 
+    def test_status_server_is_wired_with_settings_and_admin_password(self):
+        """Regression test: the web server must actually be given the live
+        Settings/WifiSettings instances and the admin password, otherwise
+        auth silently falls back to a wrong/empty value."""
+        patches = _patch_hardware()
+        for p in patches:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in patches])
+
+        class StopLoop(Exception):
+            pass
+
+        with patch("main.WDT", side_effect=micropython_mocks.FakeWDT), \
+             patch("main.time.sleep_ms", side_effect=StopLoop), \
+             patch("main.gc.collect"):
+            with self.assertRaises(StopLoop):
+                main.main()
+
+        args, kwargs = main.StatusServer.call_args
+        self.assertEqual(args[0], main.webserver_config.PORT)
+        self.assertIsInstance(args[1], main.Settings)
+        self.assertIsInstance(args[2], main.WifiSettings)
+        self.assertEqual(args[3], main.webserver_config.ADMIN_PASSWORD)
+        self.assertEqual(kwargs["reset_callback"], main.machine.reset)
+
     def test_iteration_exception_does_not_stop_the_loop_and_watchdog_is_still_fed(self):
         """A single failing iteration (e.g. a sensor glitch) must not kill
         the whole script, and the watchdog must still be fed so a real hang
