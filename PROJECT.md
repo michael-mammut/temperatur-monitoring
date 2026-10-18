@@ -103,6 +103,21 @@ Seite `/datetime-settings` ausgelagert — das Culture-/Zeitzonen-Dropdown
 allein hat ~45 Optionen und war mit Abstand der größte Einzel-Block;
 die Aufteilung senkt die größte benötigte zusammenhängende Allokation
 von ~9,7 KB auf ~5,8 KB.
+Aus einem Code-Review: Ein Sensor-Lesefehler (`-999`, jetzt als
+Konstante `SENSOR_ERROR` in `Temperature/temperature.py`) lag unter
+`TEMPERATURE_MIN` und schaltete den Lüfter bei jedem Loop-Durchlauf ein —
+anhand eines toten Sensors statt einer echten Messung. Bei Sensorfehler
+bleibt der Lüfter jetzt in seinem aktuellen Zustand. Damit ein toter
+Sensor nicht nur still auf der Statusseite als `n/a` auftaucht, meldet
+das Gerät ihn jetzt per Telegram (sofort, dann alle 12 h, Entwarnung
+sobald er wieder stabil misst; über `/settings` abschaltbar). Dabei auf
+echter Hardware gemessen, dass ein fehlender Sensor das Fehler-Log mit
+zwei identischen Einträgen pro Loop-Durchlauf bis zur 200er-Grenze
+füllte — 24 KB RAM, genug, dass auf einem Board mit MicroPython 1.16
+jede Seite inkl. `/` mit `MemoryError` scheiterte. Gleiche Fehler
+innerhalb von 12 h werden seither zu einem Eintrag mit Zähler
+zusammengefasst. Die Rohdaten des Fehler-Logs lassen sich über
+`/error-log.json` ansehen oder herunterladen.
 
 ## Wie KI in diesem Projekt eingesetzt wird
 
@@ -135,15 +150,16 @@ echte Hardware zu benötigen.
 
 | Testdatei | Anzahl Tests | Prüft |
 |---|---|---|
-| [test_main.py](tests/test_main.py) | 17 | Hauptschleife: Watchdog-Fütterung, Fehlerisolierung pro Durchlauf, Sensor-Wiederverwendung, Verdrahtung der Web-Oberfläche und der Logs, RAM-/Flash-Warnschwellen, Log-Speicher-Deckel |
-| [test_telegram.py](tests/test_telegram.py) | 11 | Telegram-Versand: Response-Schließung, UTF-8-Byte-Kodierung, Benachrichtigungs-Timing, Fehler-/Benachrichtigungs-Protokoll |
+| [test_main.py](tests/test_main.py) | 23 | Hauptschleife: Watchdog-Fütterung, Fehlerisolierung pro Durchlauf, Sensor-Wiederverwendung, Lüftersteuerung (inkl. kein Schalten bei Sensorfehler), Verdrahtung der Sensor-Fehler-Meldung, Verdrahtung der Web-Oberfläche und der Logs, RAM-/Flash-Warnschwellen, Log-Speicher-Deckel |
+| [test_telegram.py](tests/test_telegram.py) | 13 | Telegram-Versand: Response-Schließung, UTF-8-Byte-Kodierung, Erfolgs-Rückmeldung von `notify()`, Benachrichtigungs-Timing, Fehler-/Benachrichtigungs-Protokoll |
 | [test_temperature.py](tests/test_temperature.py) | 6 | Sensor-Mittelwertbildung, Absturzsicherheit bei Lesefehlern, Fehlerprotokollierung |
 | [test_wlanconnection.py](tests/test_wlanconnection.py) | 12 | WLAN-Verbindung, DHCP-Hostname, NTP-Zeitsync-Retry, Netzwerk-Scan (inkl. 30s-Cache), Signalstärke, Fehlerprotokollierung |
 | [test_settings.py](tests/test_settings.py) | 3 | Persistenz des Aquarium-Namens über Neustarts |
 | [test_wifisettings.py](tests/test_wifisettings.py) | 11 | Persistenz + Validierung der WLAN-Zugangsdaten (SSID-/Passwort-Längen nach 802.11/WPA2-Spezifikation) |
-| [test_webserver.py](tests/test_webserver.py) | 53 | HTTP-Server: Routing, HTTP-Basic-Auth, HTML-Escaping (XSS), Request-Size-Limit, Statistik-Seite (inkl. Zeilenbegrenzung gegen MemoryError), Warnschwellen-Formular, Protokollierungs-Checkboxen, Logs-löschen-Formular, `/datetime-settings` (Datum-/Zeit-Format- + Zeitzonen- + EU-Sommerzeit-Auswahl, inkl. Tagesgrenzen-Übertrag, getrennt von `/settings`), `gc.collect()` + Retry-nach-`MemoryError` vor jeder Anfrage, echte Socket-Kommunikation über Loopback |
-| [test_eventlog.py](tests/test_eventlog.py) | 15 | Persistierter Event-Log: 30-Tage-Fenster, Begrenzung auf 200 Einträge, Dateigröße, Alters-basiertes Löschen, Speicher-Budget-Durchsetzung |
-| [test_errorlog.py](tests/test_errorlog.py) | 6 | Exception → Fehlerkategorie/-code/-meldung, Ein-/Ausschalten je Kategorie |
+| [test_webserver.py](tests/test_webserver.py) | 66 | HTTP-Server: Routing, Rohdaten-Download `/error-log.json` (Auth auch mit Query-String, nosniff, Download-Header), Sensor-Fehler-Checkbox auf `/settings` (inkl. atomar), Zähler zusammengefasster Fehler auf `/statistics`, HTTP-Basic-Auth, HTML-Escaping (XSS), Request-Size-Limit, Statistik-Seite (inkl. Zeilenbegrenzung gegen MemoryError), Warnschwellen-Formular, Protokollierungs-Checkboxen, Logs-löschen-Formular, `/datetime-settings` (Datum-/Zeit-Format- + Zeitzonen- + EU-Sommerzeit-Auswahl, inkl. Tagesgrenzen-Übertrag, getrennt von `/settings`), `gc.collect()` + Retry-nach-`MemoryError` vor jeder Anfrage, echte Socket-Kommunikation über Loopback |
+| [test_eventlog.py](tests/test_eventlog.py) | 23 | Persistierter Event-Log: 30-Tage-Fenster, Begrenzung auf 200 Einträge, stückweises Senden der Rohdatei, Zusammenfassen gleicher Einträge mit Zähler (Fenstergrenze, Persistenz, nicht beim Benachrichtigungs-Log), Dateigröße, Alters-basiertes Löschen, Speicher-Budget-Durchsetzung |
+| [test_errorlog.py](tests/test_errorlog.py) | 7 | Exception → Fehlerkategorie/-code/-meldung, Ein-/Ausschalten je Kategorie, Zusammenfassen innerhalb von 12 h |
+| [test_sensoralert.py](tests/test_sensoralert.py) | 17 | Sensor-Fehler-Meldung: Bestätigung nach 3 Fehl-Messungen, 12-h-Erinnerung, Nachholen wenn offline, Retry-Pause nach Sendefehler, Entwarnung erst nach stabilen Werten (kein Flattern), Sensoren unabhängig, Persistenz + Fallbacks der Einstellung |
 | [test_loggingsettings.py](tests/test_loggingsettings.py) | 4 | Persistenz der Protokollierungs-Ein/Aus-Schalter je Kategorie |
 | [test_loginlog.py](tests/test_loginlog.py) | 3 | Login-Zeitpunkt-Persistenz, Rückgabe des *vorherigen* Logins |
 | [test_systemstats.py](tests/test_systemstats.py) | 2 | RAM-/Flash-Belegung (`used + free == total`) |
@@ -151,7 +167,7 @@ echte Hardware zu benötigen.
 | [test_datetimeformat.py](tests/test_datetimeformat.py) | 34 | Datums-/Zeit-Formatierung je Country/Culture (Tag/Monat-Reihenfolge, 12h-/24h-Anzeige inkl. Mitternacht/Mittag), Fallback auf ISO 8601 bei unbekannter Culture, UTC-Offset-Verschiebung inkl. Tages-/Monats-/Jahres-/Schaltjahr-Übertrag, Halb-/Viertelstunden-Offsets, EU-Sommerzeit-Umstellung (Übergangs-Instant auf die Sekunde, inkl. Schaltjahr) |
 | [test_datetimesettings.py](tests/test_datetimesettings.py) | 8 | Persistenz + Validierung der gewählten Culture, des UTC-Offsets und der EU-Sommerzeit-Checkbox, Fallback bei veralteter/ungültiger/fehlender gespeicherter Culture bzw. Offset bzw. Sommerzeit-Flag |
 
-**Gesamt: 192 Tests**, Stand des letzten vollständigen Durchlaufs in diesem
+**Gesamt: 239 Tests**, Stand des letzten vollständigen Durchlaufs in diesem
 Dokument. Viele Tests sind als Regressionstests für konkret auf der
 Hardware beobachtete Bugs angelegt (siehe Docstrings in den jeweiligen
 Testdateien) — sie beschreiben bewusst, *welches reale Problem* sie

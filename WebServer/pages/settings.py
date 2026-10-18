@@ -28,6 +28,8 @@ def handle_post(server, monitor, body):
                 for category in ALL_CATEGORIES
             }
             server._logging_settings.set_enabled(enabled_by_category)
+        if server._sensor_alert_settings is not None:
+            server._sensor_alert_settings.set_enabled(server._parse_form_field(body, 'sensor_alert') is not None)
 
     return render(server, saved=(error is None), error=error)
 
@@ -69,6 +71,14 @@ def render(server, saved=False, error=None):
                     cat=category, checked=checked, label=server._escape_html(CATEGORY_LABELS[category])))
         logging_fields = '<p>Fehlerprotokollierung:</p>\n' + '\n'.join(checkboxes)
 
+    alert_fields = ''
+    if server._sensor_alert_settings is not None:
+        checked = ' checked' if server._sensor_alert_settings.is_enabled() else ''
+        alert_fields = (
+            '<p>Benachrichtigungen:</p>\n'
+            '<label class="check"><input type="checkbox" name="sensor_alert" value="1"{}> '
+            'Sensor-Fehler per Telegram melden (sofort, dann alle 12 h)</label>'.format(checked))
+
     return """<!DOCTYPE html>
 <html>
 <head>
@@ -84,6 +94,7 @@ def render(server, saved=False, error=None):
 <label>Aquarium-Name: <input type="text" name="name" value="{name}" maxlength="64"></label>
 {monitoring_fields}
 {logging_fields}
+{alert_fields}
 <button type="submit">Speichern</button>
 </form>
 <p class="nav"><a href="/">Status</a> | <a href="/wifi-settings">WLAN</a> | <a href="/datetime-settings">Datum/Zeit</a> | <a href="/statistics">Statistik</a></p>
@@ -91,4 +102,4 @@ def render(server, saved=False, error=None):
 </body>
 </html>
 """.format(style=STYLE, message=message, name=name, monitoring_fields=monitoring_fields,
-           logging_fields=logging_fields)
+           logging_fields=logging_fields, alert_fields=alert_fields)

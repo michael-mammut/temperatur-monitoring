@@ -21,6 +21,7 @@ class Telegram:
         self._project_name = project_name
 
     def notify(self, message):
+        """Returns True if the message was handed to Telegram."""
         if message == None:
             message = "-- no message --"
 
@@ -37,10 +38,12 @@ class Telegram:
             print(str(res.json()))
             if self._notification_log is not None:
                 self._notification_log.record({})
+            return True
         except Exception as ow_exc:
             print("Telegram notify failed:", ow_exc)
             record_exception(self._error_log, CATEGORY_EXTERNAL_API, ow_exc, logging_settings=self._logging_settings)
             led_error_twinkle(22, 23, 100, 5)
+            return False
         finally:
             if res is not None:
                 res.close()

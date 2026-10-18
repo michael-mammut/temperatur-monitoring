@@ -2,6 +2,9 @@ from machine import Pin
 from WebServer.errorlog import CATEGORY_HARDWARE, record_exception
 import array, ds18x20, onewire, time
 
+# Returned by readCurrentAverage() when no sensor value could be read.
+SENSOR_ERROR = -999
+
 class Temperature:
     def __init__(self, gpio, error_log=None, logging_settings=None):
         self.__gpio = gpio
@@ -25,7 +28,7 @@ class Temperature:
         return self._averageTemperature(temperature_list)
 
     def _averageTemperature(self, temperature_list):
-        average = -999
+        average = SENSOR_ERROR
         temperature_list_count = len(temperature_list)
         if temperature_list_count > 0:
             temperature_sum = 0

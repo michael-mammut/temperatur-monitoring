@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import micropython_mocks
 micropython_mocks.install()
 
-from WebServer.errorlog import CATEGORY_HARDWARE, record_exception
+from WebServer.errorlog import CATEGORY_HARDWARE, MERGE_WINDOW_SECONDS, record_exception
 
 
 class RecordExceptionTests(unittest.TestCase):
@@ -24,7 +24,10 @@ class RecordExceptionTests(unittest.TestCase):
             'category': CATEGORY_HARDWARE,
             'code': 'ValueError',
             'message': 'sensor missing',
-        })
+        }, merge_within_seconds=MERGE_WINDOW_SECONDS)
+
+    def test_repeats_are_merged_within_12_hours(self):
+        self.assertEqual(MERGE_WINDOW_SECONDS, 12 * 60 * 60)
 
     def test_long_message_is_truncated(self):
         fake_log = MagicMock()

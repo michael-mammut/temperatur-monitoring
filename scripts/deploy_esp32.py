@@ -70,6 +70,7 @@ FILES = [
     "WlanNetwork/config.py",
     "Monitoring/config.py",
     "Monitoring/settings.py",
+    "Monitoring/sensoralert.py",
 ]
 
 

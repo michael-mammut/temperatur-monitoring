@@ -1,7 +1,9 @@
 import base64
+import json
 import os
 import socket
 import sys
+import tempfile
 import time
 import unittest
 from types import SimpleNamespace
@@ -543,6 +545,160 @@ class LoggingSettingsOnSettingsPageTests(unittest.TestCase):
         self.assertIn("2026-10-17 06:05:09 UTC", html)
 
 
+class ErrorLogDownloadTests(unittest.TestCase):
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._cwd = os.getcwd()
+        os.chdir(self._tmpdir.name)
+        self.addCleanup(self._restore_cwd)
+
+    def _restore_cwd(self):
+        os.chdir(self._cwd)
+        self._tmpdir.cleanup()
+
+    def _get(self, path, error_log=None, authorized=True):
+        server = _new_server(error_log=error_log)
+        server._test_monitor = _fake_monitor()
+        auth = "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n" if authorized else ""
+        try:
+            return _request(server, ("GET " + path + " HTTP/1.1\r\nHost: localhost\r\n" + auth + "\r\n").encode())
+        finally:
+            server._socket.close()
+
+    def _log_with_entries(self):
+        from WebServer.eventlog import EventLog
+        log = EventLog('error_log.json')
+        log.record({'category': 'hardware', 'code': 'OneWireError', 'message': ''}, merge_within_seconds=3600)
+        log.record({'category': 'hardware', 'code': 'OneWireError', 'message': ''}, merge_within_seconds=3600)
+        return log
+
+    def test_requires_authentication(self):
+        response = self._get("/error-log.json", error_log=self._log_with_entries(), authorized=False)
+
+        self.assertIn("401 Unauthorized", response)
+        self.assertNotIn("OneWireError", response)
+
+    def test_query_string_does_not_bypass_authentication(self):
+        response = self._get("/error-log.json?download=1", error_log=self._log_with_entries(), authorized=False)
+
+        self.assertIn("401 Unauthorized", response)
+
+    def test_returns_the_raw_json_file(self):
+        response = self._get("/error-log.json", error_log=self._log_with_entries())
+
+        head, _, body = response.partition("\r\n\r\n")
+        self.assertIn("200 OK", head)
+        self.assertIn("Content-Type: application/json; charset=utf-8", head)
+        entries = json.loads(body)
+        self.assertEqual(entries[0]['code'], 'OneWireError')
+        self.assertEqual(entries[0]['count'], 2)
+
+    def test_is_never_rendered_as_html(self):
+        """Error messages can contain text from outside (e.g. a server
+        response) - the browser must not sniff it as HTML."""
+        response = self._get("/error-log.json", error_log=self._log_with_entries())
+
+        self.assertIn("X-Content-Type-Options: nosniff", response)
+
+    def test_shown_inline_by_default(self):
+        response = self._get("/error-log.json", error_log=self._log_with_entries())
+
+        self.assertNotIn("Content-Disposition", response)
+
+    def test_download_parameter_saves_as_file(self):
+        response = self._get("/error-log.json?download=1", error_log=self._log_with_entries())
+
+        self.assertIn('Content-Disposition: attachment; filename="error_log.json"', response)
+
+    def test_without_error_log_returns_empty_list(self):
+        response = self._get("/error-log.json", error_log=None)
+
+        self.assertEqual(response.partition("\r\n\r\n")[2], "[]")
+
+    def test_statistics_page_links_to_raw_data(self):
+        server = _new_server()
+        try:
+            html = server.render_statistics(_fake_monitor(), None)
+        finally:
+            server._socket.close()
+
+        self.assertIn('href="/error-log.json"', html)
+        self.assertIn('href="/error-log.json?download=1"', html)
+
+
+class _FakeSensorAlertSettings:
+    def __init__(self, enabled=True):
+        self._enabled = enabled
+        self.saved = None
+
+    def is_enabled(self):
+        return self._enabled
+
+    def set_enabled(self, enabled):
+        self._enabled = enabled
+        self.saved = enabled
+
+
+class SensorAlertOnSettingsPageTests(unittest.TestCase):
+    def _post(self, server, body):
+        request = (
+            "POST /settings HTTP/1.1\r\nHost: localhost\r\n"
+            "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n"
+            "Content-Type: application/x-www-form-urlencoded\r\n"
+            "Content-Length: " + str(len(body)) + "\r\n\r\n"
+        ).encode() + body
+        return _request(server, request)
+
+    def _server(self, alert_settings, monitoring_settings=None):
+        server = _new_server(monitoring_settings=monitoring_settings)
+        server._sensor_alert_settings = alert_settings
+        server._test_monitor = _fake_monitor()
+        return server
+
+    def test_checkbox_reflects_current_state(self):
+        for enabled, expected in ((True, 'name="sensor_alert" value="1" checked>'),
+                                  (False, 'name="sensor_alert" value="1">')):
+            server = self._server(_FakeSensorAlertSettings(enabled=enabled))
+            try:
+                html = server.render_settings()
+            finally:
+                server._socket.close()
+            self.assertIn(expected, html)
+
+    def test_checked_box_enables_and_unchecked_box_disables(self):
+        alert_settings = _FakeSensorAlertSettings(enabled=False)
+        server = self._server(alert_settings)
+        try:
+            self._post(server, b"name=Vorzimmer&sensor_alert=1")
+            self.assertIs(alert_settings.saved, True)
+            # unchecked checkboxes are simply missing from the form body
+            self._post(server, b"name=Vorzimmer")
+            self.assertIs(alert_settings.saved, False)
+        finally:
+            server._socket.close()
+
+    def test_validation_error_does_not_change_the_setting(self):
+        """Atomic with the other /settings fields."""
+        alert_settings = _FakeSensorAlertSettings(enabled=True)
+        server = self._server(alert_settings, monitoring_settings=_FakeMonitoringSettings())
+        try:
+            response = self._post(server, b"name=Vorzimmer&ram_percent=99&storage_percent=20")
+        finally:
+            server._socket.close()
+
+        self.assertIn("Fehler", response)
+        self.assertIsNone(alert_settings.saved)
+
+    def test_page_without_sensor_alert_settings_omits_the_checkbox(self):
+        server = self._server(None)
+        try:
+            html = server.render_settings()
+        finally:
+            server._socket.close()
+
+        self.assertNotIn("sensor_alert", html)
+
+
 class DateTimeSettingsPageTests(unittest.TestCase):
     """/datetime-settings - split off from /settings so the biggest
     single chunk of that page (culture + ~38 timezone options) doesn't
@@ -925,6 +1081,28 @@ class StatisticsPageTests(unittest.TestCase):
         self.assertIn("sensor missing", response)
         self.assertIn("no AP found", response)
         self.assertIn("OSError", response)
+
+    def test_statistics_page_counts_merged_errors_with_their_count(self):
+        """Identical errors within 12 h are merged into one entry with a
+        count - the page must still show how often they happened."""
+        error_log = MagicMock()
+        error_log.file_size.return_value = 0
+        error_log.entries_within.return_value = [
+            {'timestamp': 1700000000, 'category': 'hardware', 'code': 'OneWireError', 'message': '', 'count': 37},
+        ]
+        server = _new_server(error_log=error_log)
+        server._test_monitor = _fake_monitor()
+        try:
+            request = (
+                "GET /statistics HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n"
+            ).encode()
+            response = _request(server, request)
+        finally:
+            server._socket.close()
+
+        self.assertIn("OneWireError &times;37", response)
+        self.assertIn(">37<", response)  # chart bar label for the hardware category
 
     def test_statistics_page_caps_displayed_rows_to_avoid_large_allocation(self):
         """Regression test found on real hardware: joining up to 200 rows

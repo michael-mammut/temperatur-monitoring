@@ -81,6 +81,7 @@ def render(server, monitor, previous_login, message=None):
 <tr><th>Zeitpunkt (UTC)</th><th>Kategorie</th><th>Fehlercode</th><th>Fehlermeldung</th></tr>
 {error_rows}
 </table>
+<p>Rohdaten: <a href="/error-log.json">anzeigen</a> | <a href="/error-log.json?download=1">als JSON herunterladen</a></p>
 
 <h2>Logs bereinigen</h2>
 {message_html}
@@ -133,7 +134,7 @@ def _error_counts_by_category(server):
         return counts
     for entry in server._error_log.entries_within(_THIRTY_DAYS_SECONDS):
         category = entry.get('category', CATEGORY_SYSTEM)
-        counts[category] = counts.get(category, 0) + 1
+        counts[category] = counts.get(category, 0) + entry.get('count', 1)
     return counts
 
 
@@ -155,6 +156,8 @@ def _render_error_table(server):
         timestamp = _format_epoch(server, entry.get('timestamp'))
         category = server._escape_html(CATEGORY_LABELS.get(entry.get('category'), entry.get('category', '')))
         code = server._escape_html(str(entry.get('code', '')))
+        if entry.get('count', 1) > 1:
+            code += ' &times;{}'.format(int(entry['count']))
         message = server._escape_html(str(entry.get('message', '')))
         rows.append(
             '<tr><td>{ts}</td><td>{cat}</td><td>{code}</td><td>{msg}</td></tr>'.format(

@@ -18,6 +18,10 @@ _MAX_REQUEST_BYTES = 2048
 
 _PROTECTED_PATHS = ('/settings', '/wifi-settings', '/statistics', '/datetime-settings')
 
+# Raw error log (protected like the other admin pages); "?download=1"
+# makes the browser save it as a file instead of displaying it.
+ERROR_LOG_PATH = '/error-log.json'
+
 # One retry after a MemoryError (see _render_with_retry): the first
 # attempt plus one more after an extra gc.collect().
 _MAX_RENDER_ATTEMPTS = 2
@@ -30,7 +34,7 @@ class WebServer:
 
     def __init__(self, port, settings, wifi_settings, admin_password, reset_callback,
                  error_log=None, notification_log=None, login_log=None, monitoring_settings=None,
-                 logging_settings=None, datetime_settings=None):
+                 logging_settings=None, datetime_settings=None, sensor_alert_settings=None):
         self._settings = settings
         self._wifi_settings = wifi_settings
         self._admin_password = admin_password
@@ -41,6 +45,7 @@ class WebServer:
         self._monitoring_settings = monitoring_settings
         self._logging_settings = logging_settings
         self._datetime_settings = datetime_settings
+        self._sensor_alert_settings = sensor_alert_settings
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._socket.bind(('0.0.0.0', port))
@@ -57,6 +62,15 @@ class WebServer:
         try:
             client.settimeout(2)
             method, path, headers, body = self._parse_request(client.recv(_MAX_REQUEST_BYTES))
+
+            route, _, query = path.partition('?')
+            if route == ERROR_LOG_PATH:
+                if self._is_authorized(headers):
+                    self._record_login()
+                    self._send_error_log(client, download='download=1' in query.split('&'))
+                else:
+                    client.send(self._unauthorized_response().encode('utf-8'))
+                return
 
             if path in _PROTECTED_PATHS and not self._is_authorized(headers):
                 response = self._unauthorized_response()
@@ -204,6 +218,24 @@ class WebServer:
             "Content-Type: text/plain; charset=utf-8\r\n"
             "Connection: close\r\n\r\n" + body
         )
+
+    def _send_error_log(self, client, download=False):
+        # Streamed straight from flash instead of built as one string (see
+        # EventLog.stream_to). "nosniff" stops browsers from rendering it
+        # as HTML: error messages can contain text from outside (e.g. a
+        # server response), which must never be interpreted as markup.
+        head = (
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: application/json; charset=utf-8\r\n"
+            "X-Content-Type-Options: nosniff\r\n"
+        )
+        if download:
+            head += "Content-Disposition: attachment; filename=\"error_log.json\"\r\n"
+        client.sendall((head + "Connection: close\r\n\r\n").encode('utf-8'))
+        if self._error_log is None:
+            client.sendall(b'[]')
+        else:
+            self._error_log.stream_to(client.sendall)
 
     def _html_response(self, body):
         return (

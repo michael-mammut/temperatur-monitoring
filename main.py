@@ -9,12 +9,13 @@ from GpioControl.ActorControl import ActorControl
 from GpioControl import config as actor_config
 from GpioControl.LedControl import led_error_twinkle, led_twinkle
 from Notification.telegram import Telegram
-from Temperature.temperature import Temperature
+from Temperature.temperature import SENSOR_ERROR, Temperature
 from WlanNetwork.wlanconnection import WlanConnection
 from WlanNetwork.wifisettings import WifiSettings
 from WlanNetwork import config as wlan_config
 from Airpump import config as air_pump_config
 from Monitoring.settings import MonitoringSettings
+from Monitoring.sensoralert import SensorAlert, SensorAlertSettings
 from Monitoring import config as monitoring_config
 from WebServer.webserver import WebServer
 from WebServer.settings import Settings
@@ -58,6 +59,8 @@ class AquariumMonitor:
             temperature_config.ONE_WIRE_GPIO_AMBIENT, error_log=self.error_log, logging_settings=self.logging_settings)
         self.water_sensor = Temperature(
             temperature_config.ONE_WIRE_GPIO_WATER, error_log=self.error_log, logging_settings=self.logging_settings)
+        self.sensor_alert_settings = SensorAlertSettings()
+        self.sensor_alert = SensorAlert(self.telegram, self.sensor_alert_settings)
 
         self.air_pump_state = False
         self.first_run = True
@@ -94,10 +97,17 @@ class AquariumMonitor:
             self.pin_K3_5_volt_air_pump.on()
             self.air_pump_state = False
 
-        if water_temperature > temperature_config.TEMPERATURE_MAX:
-            self.pin_K2_12_volt_fan.off()
-        elif water_temperature < temperature_config.TEMPERATURE_MIN:
-            self.pin_K2_12_volt_fan.on()
+        # A failed sensor read must not drive the fan - keep its current state.
+        if water_temperature != SENSOR_ERROR:
+            if water_temperature > temperature_config.TEMPERATURE_MAX:
+                self.pin_K2_12_volt_fan.off()
+            elif water_temperature < temperature_config.TEMPERATURE_MIN:
+                self.pin_K2_12_volt_fan.on()
+
+        online = self.wlan.isConnected()
+        self.sensor_alert.update(
+            "Wassersensor", water_temperature, online, hint=" Der Lüfter wird so lange nicht automatisch geschaltet.")
+        self.sensor_alert.update("Umgebungssensor", ambient_temperature, online)
 
         self._enforce_log_storage_budget()
 
@@ -155,6 +165,7 @@ def main():
         monitoring_settings=monitor.monitoring_settings,
         logging_settings=monitor.logging_settings,
         datetime_settings=monitor.datetime_settings,
+        sensor_alert_settings=monitor.sensor_alert_settings,
     )
     print("----- LOOP START ------")
     while True:

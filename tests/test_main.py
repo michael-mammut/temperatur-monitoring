@@ -91,6 +91,91 @@ class AquariumMonitorTests(_IsolatedCwdTestCase):
         self.assertEqual(monitor.wlan.ensure_time_synced.call_count, 3)
 
 
+class FanControlTests(_IsolatedCwdTestCase):
+    def _monitor_with_water_temperature(self, water_temperature):
+        patches = _patch_hardware()
+        for p in patches:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in patches])
+
+        monitor = main.AquariumMonitor()
+        # ActorControl is patched with one shared mock for all relays; give the
+        # fan its own so air-pump/WLAN switching cannot leak into the asserts.
+        monitor.pin_K2_12_volt_fan = MagicMock()
+        monitor.water_sensor.readCurrentAverage.return_value = water_temperature
+        return monitor
+
+    def test_sensor_error_does_not_switch_the_fan(self):
+        """Regression test: the SENSOR_ERROR sentinel (-999) is below
+        TEMPERATURE_MIN and used to switch the fan on every iteration
+        based on a dead sensor instead of a real measurement."""
+        monitor = self._monitor_with_water_temperature(main.SENSOR_ERROR)
+
+        monitor.run_iteration()
+
+        monitor.pin_K2_12_volt_fan.on.assert_not_called()
+        monitor.pin_K2_12_volt_fan.off.assert_not_called()
+
+    def test_temperature_above_max_switches_fan_off(self):
+        monitor = self._monitor_with_water_temperature(main.temperature_config.TEMPERATURE_MAX + 0.5)
+
+        monitor.run_iteration()
+
+        monitor.pin_K2_12_volt_fan.off.assert_called_once()
+        monitor.pin_K2_12_volt_fan.on.assert_not_called()
+
+    def test_temperature_below_min_switches_fan_on(self):
+        monitor = self._monitor_with_water_temperature(main.temperature_config.TEMPERATURE_MIN - 0.5)
+
+        monitor.run_iteration()
+
+        monitor.pin_K2_12_volt_fan.on.assert_called_once()
+        monitor.pin_K2_12_volt_fan.off.assert_not_called()
+
+    def test_temperature_within_range_leaves_fan_unchanged(self):
+        monitor = self._monitor_with_water_temperature(
+            (main.temperature_config.TEMPERATURE_MIN + main.temperature_config.TEMPERATURE_MAX) / 2)
+
+        monitor.run_iteration()
+
+        monitor.pin_K2_12_volt_fan.on.assert_not_called()
+        monitor.pin_K2_12_volt_fan.off.assert_not_called()
+
+
+class SensorAlertWiringTests(_IsolatedCwdTestCase):
+    def test_both_sensors_are_reported_every_iteration(self):
+        patches = _patch_hardware()
+        for p in patches:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in patches])
+
+        monitor = main.AquariumMonitor()
+        monitor.sensor_alert = MagicMock()
+        monitor.water_sensor.readCurrentAverage.return_value = main.SENSOR_ERROR
+        monitor.run_iteration()
+
+        labels = [c.args[0] for c in monitor.sensor_alert.update.call_args_list]
+        self.assertEqual(labels, ["Wassersensor", "Umgebungssensor"])
+        water_call = monitor.sensor_alert.update.call_args_list[0]
+        self.assertEqual(water_call.args[1], main.SENSOR_ERROR)
+        self.assertTrue(water_call.args[2])  # online
+
+    def test_sensor_alert_settings_are_passed_to_the_web_server(self):
+        patches = _patch_hardware()
+        for p in patches:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in patches])
+
+        class StopLoop(Exception):
+            pass
+
+        with patch("main.WDT"), patch("main.time.sleep_ms", side_effect=StopLoop):
+            with self.assertRaises(StopLoop):
+                main.main()
+
+        self.assertIn("sensor_alert_settings", main.WebServer.call_args.kwargs)
+
+
 class MainLoopWatchdogTests(_IsolatedCwdTestCase):
     """Regression tests for the missing watchdog: without WDT.feed(), any
     unhandled hang/exception used to require a manual hard reset."""

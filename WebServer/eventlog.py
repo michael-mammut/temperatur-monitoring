@@ -21,12 +21,56 @@ class EventLog:
         except (OSError, ValueError):
             self._entries = []
 
-    def record(self, data):
+    def record(self, data, merge_within_seconds=None):
+        """With merge_within_seconds, an identical entry (same fields)
+        first recorded less than that long ago is not added again - its
+        'count' goes up and 'last' holds the latest occurrence instead.
+        Keeps a permanently failing sensor from filling the whole log
+        (200 entries = ~24 KB of RAM on the ESP32) with copies of itself,
+        while 'timestamp' stays the first occurrence, so a persisting
+        error still gets a fresh entry once per window."""
+        now = time.time()
+        if merge_within_seconds is not None:
+            existing = self._find_recent(data, now - merge_within_seconds)
+            if existing is not None:
+                existing['count'] = existing.get('count', 1) + 1
+                existing['last'] = now
+                self._save()
+                return
         entry = dict(data)
-        entry['timestamp'] = time.time()
+        entry['timestamp'] = now
         self._entries.append(entry)
         if len(self._entries) > _MAX_ENTRIES:
             self._entries = self._entries[-_MAX_ENTRIES:]
+        self._save()
+
+    def _find_recent(self, data, cutoff):
+        for entry in reversed(self._entries):
+            if entry.get('timestamp', 0) <= cutoff:
+                return None  # entries are chronological, the rest is older
+            if all(entry.get(key) == value for key, value in data.items()):
+                return entry
+        return None
+
+    def stream_to(self, send, chunk_size=512):
+        """Sends the raw JSON file in small chunks via send(bytes), never
+        holding the whole file in RAM at once - a full log is ~17 KB, far
+        more than the ESP32 can reliably allocate in one piece."""
+        try:
+            f = open(self._path, 'rb')
+        except OSError:
+            send(b'[]')  # nothing recorded yet
+            return
+        try:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                send(chunk)
+        finally:
+            f.close()
+
+    def _save(self):
         with open(self._path, 'w') as f:
             ujson.dump(self._entries, f)
 
@@ -35,7 +79,7 @@ class EventLog:
         return [e for e in self._entries if e.get('timestamp', 0) >= cutoff]
 
     def count_within(self, seconds=_DEFAULT_WINDOW_SECONDS):
-        return len(self.entries_within(seconds))
+        return sum(e.get('count', 1) for e in self.entries_within(seconds))
 
     def file_size(self):
         try:

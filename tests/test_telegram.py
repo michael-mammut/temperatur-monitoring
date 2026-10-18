@@ -122,6 +122,21 @@ class NotifyClosesResponseTests(unittest.TestCase):
         self.assertEqual(fake_error_log.record.call_args[0][0]['category'], 'external_api')
 
 
+class NotifyResultTests(unittest.TestCase):
+    """SensorAlert retries a warning later only if it knows the send
+    failed - notify() has to tell it."""
+
+    def test_successful_send_returns_true(self):
+        fake_response = MagicMock()
+        fake_response.json.return_value = {"ok": True}
+        with patch("Notification.telegram.urequests.post", return_value=fake_response):
+            self.assertTrue(Telegram("Vorzimmer").notify("hello"))
+
+    def test_failed_send_returns_false(self):
+        with patch("Notification.telegram.urequests.post", side_effect=OSError("no route to host")):
+            self.assertFalse(Telegram("Vorzimmer").notify("hello"))
+
+
 class NotificationTimingTests(unittest.TestCase):
     def test_first_run_always_notifies(self):
         telegram = Telegram("Vorzimmer", morning_hour_message=6, afternoon_hour_message=14)

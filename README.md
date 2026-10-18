@@ -209,7 +209,7 @@ sequenceDiagram
 | [WebServer/webstyle.py](WebServer/webstyle.py) | Gemeinsames CSS (hell/dunkel) für alle vier Seiten |
 | [WebServer/settings.py](WebServer/settings.py) | Persistiert den Aquarium-Namen |
 | [WlanNetwork/wifisettings.py](WlanNetwork/wifisettings.py) | Persistiert WLAN-Zugangsdaten, die über `/wifi-settings` geändert wurden |
-| [WebServer/eventlog.py](WebServer/eventlog.py) | Persistierter, auf 200 Einträge begrenzter Event-Log (Basis für Fehler- und Benachrichtigungs-Protokoll); enthält auch `enforce_storage_budget()` (hält Logs zusammen unter einem Anteil des *verfügbaren* Speichers, nicht der Gesamtkapazität) |
+| [WebServer/eventlog.py](WebServer/eventlog.py) | Persistierter, auf 200 Einträge begrenzter Event-Log (Basis für Fehler- und Benachrichtigungs-Protokoll); gleiche Fehler innerhalb von 12 h werden zu einem Eintrag mit Zähler zusammengefasst (`record(..., merge_within_seconds=...)`), damit ein dauerhaft defekter Sensor das Log nicht vollschreibt (200 Einträge belegen ~24 KB RAM auf dem ESP32, gemessen); enthält auch `enforce_storage_budget()` (hält Logs zusammen unter einem Anteil des *verfügbaren* Speichers, nicht der Gesamtkapazität) |
 | [WebServer/errorlog.py](WebServer/errorlog.py) | Fehlerkategorien (System/Hardware/Netzwerk/Externe APIs) + Hilfsfunktion zum Mitschreiben einer Exception |
 | [WebServer/loggingsettings.py](WebServer/loggingsettings.py) | Persistiert, welche Fehlerkategorien überhaupt protokolliert werden (über `/settings` abschaltbar) |
 | [WebServer/loginlog.py](WebServer/loginlog.py) | Persistiert den Zeitpunkt des letzten erfolgreichen Logins |
@@ -217,6 +217,7 @@ sequenceDiagram
 | [WebServer/datetimesettings.py](WebServer/datetimesettings.py) | Persistiert die gewählte Country/Culture, den UTC-Offset und ob die automatische EU-Sommerzeit aktiv ist, für die Datums-/Zeit-Anzeige (über `/settings` änderbar) |
 | [WebServer/systemstats.py](WebServer/systemstats.py) | RAM- und Flash-Belegung (`gc`, `os.statvfs`) |
 | [Monitoring/settings.py](Monitoring/settings.py) | Persistiert die RAM-/Flash-Warnschwellen und den Log-Speicher-Deckel, die über `/settings` geändert wurden |
+| [Monitoring/sensoralert.py](Monitoring/sensoralert.py) | Telegram-Meldung bei Sensor-Ausfall: Warnung nach 3 Fehl-Messungen in Folge, Erinnerung alle 12 h, Entwarnung erst nach 10 min stabiler Messwerte (gegen Flattern bei Wackelkontakt); über `/settings` abschaltbar (Default: an) |
 | `*/config.py` | Je Modul eigene Konfiguration (siehe unten) |
 
 ## Konfigurationsparameter
@@ -321,10 +322,11 @@ Keine Secrets, daher regulär in Git. Werte sind auch über `/settings` zur Lauf
 | URL | Zugriff | Zweck |
 |---|---|---|
 | `http://<IP>/` | öffentlich | Temperaturen, Online-Status, Zeitstempel der letzten Messung |
-| `http://<IP>/settings` | Admin-Passwort | Aquarium-Namen ändern, RAM-/Flash-/Log-Speicher-Warnschwellen anpassen, Fehlerprotokollierung je Kategorie ein-/ausschalten |
+| `http://<IP>/settings` | Admin-Passwort | Aquarium-Namen ändern, RAM-/Flash-/Log-Speicher-Warnschwellen anpassen, Fehlerprotokollierung je Kategorie ein-/ausschalten, Sensor-Fehler per Telegram melden ein-/ausschalten |
 | `http://<IP>/datetime-settings` | Admin-Passwort | Datum-/Zeit-Anzeigeformat (Country/Culture) + Zeitzone (fester UTC-Offset) + automatische EU-Sommerzeit wählen — eigene Seite, damit die größte einzelne Formular-Sektion (Culture- + Zeitzonen-Dropdown, ~45 Optionen) nicht Teil von `/settings` sein muss (siehe Speicher-Hinweis unten) |
 | `http://<IP>/wifi-settings` | Admin-Passwort | WLAN-Netzwerk per Dropdown wählen + neues Passwort setzen; speichert und startet das Gerät neu |
 | `http://<IP>/statistics` | Admin-Passwort | RAM-/Flash-Belegung (inkl. Log-Speicherverbrauch gegen den konfigurierten, vom verfügbaren Speicher abhängigen Deckel), letzter Login, WLAN-Signalstärke, Anzahl gesendeter Benachrichtigungen (30 Tage), Fehler-Diagramm + -Tabelle (30 Tage, nach System/Hardware/Netzwerk/Externe APIs, max. die letzten 20 Zeilen), Formular zum manuellen Löschen von Log-Einträgen älter als X Minuten. Aktualisiert sich automatisch alle 30 s. |
+| `http://<IP>/error-log.json` | Admin-Passwort | Rohdaten des Fehler-Logs als JSON (im Browser ansehen); mit `?download=1` als Datei `error_log.json` herunterladen. Verlinkt auf `/statistics`. Wird stückweise direkt vom Flash gesendet, nie komplett in den RAM geladen |
 
 `/` aktualisiert sich ebenfalls automatisch alle 30 s; `/settings` und `/wifi-settings` nicht.
 

@@ -1,5 +1,6 @@
 from WebServer.datetimeformat import format_datetime
 from WebServer.webstyle import STYLE
+from Temperature.temperature import SENSOR_ERROR
 
 
 def render(server, monitor):
@@ -35,7 +36,7 @@ def render(server, monitor):
 
 
 def _format_temperature(value):
-    if value is None or value == -999:
+    if value is None or value == SENSOR_ERROR:
         return "n/a"
     return str(value)
 

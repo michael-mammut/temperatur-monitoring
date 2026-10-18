@@ -3,6 +3,10 @@ CATEGORY_HARDWARE = 'hardware'
 CATEGORY_NETWORK = 'network'
 CATEGORY_EXTERNAL_API = 'external_api'
 
+# The same error (category + code + message) recurring within this window
+# is merged into one log entry with a counter instead of a new entry each.
+MERGE_WINDOW_SECONDS = 12 * 60 * 60
+
 ALL_CATEGORIES = (CATEGORY_SYSTEM, CATEGORY_HARDWARE, CATEGORY_NETWORK, CATEGORY_EXTERNAL_API)
 
 CATEGORY_LABELS = {
@@ -27,4 +31,4 @@ def record_exception(error_log, category, exc, logging_settings=None):
         'category': category,
         'code': type(exc).__name__,
         'message': str(exc)[:200],
-    })
+    }, merge_within_seconds=MERGE_WINDOW_SECONDS)

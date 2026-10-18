@@ -56,6 +56,82 @@ class EventLogTests(unittest.TestCase):
         with patch("WebServer.eventlog.time.time", return_value=1000.0 + 5 * 24 * 60 * 60):
             self.assertEqual(log.count_within(30 * 24 * 60 * 60), 1)
 
+    def test_identical_entry_within_merge_window_only_increments_count(self):
+        """Regression target: a disconnected sensor logged two identical
+        entries per loop iteration, filled the log to its 200-entry cap
+        and took ~24 KB of RAM on the ESP32 (measured)."""
+        log = EventLog('events.json')
+        with patch("WebServer.eventlog.time.time", return_value=1000.0):
+            log.record({'code': 'OneWireError'}, merge_within_seconds=3600)
+        with patch("WebServer.eventlog.time.time", return_value=1500.0):
+            log.record({'code': 'OneWireError'}, merge_within_seconds=3600)
+            log.record({'code': 'OneWireError'}, merge_within_seconds=3600)
+            entries = log.entries_within()
+
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]['count'], 3)
+        self.assertEqual(entries[0]['timestamp'], 1000.0)  # first occurrence
+        self.assertEqual(entries[0]['last'], 1500.0)
+
+    def test_merged_count_is_included_in_count_within(self):
+        log = EventLog('events.json')
+        for _ in range(5):
+            log.record({'code': 'X'}, merge_within_seconds=3600)
+
+        self.assertEqual(log.count_within(), 5)
+
+    def test_merged_count_persists_across_instances(self):
+        log = EventLog('events.json')
+        log.record({'code': 'X'}, merge_within_seconds=3600)
+        log.record({'code': 'X'}, merge_within_seconds=3600)
+
+        self.assertEqual(EventLog('events.json').entries_within()[0]['count'], 2)
+
+    def test_same_error_after_merge_window_gets_a_new_entry(self):
+        log = EventLog('events.json')
+        with patch("WebServer.eventlog.time.time", return_value=1000.0):
+            log.record({'code': 'X'}, merge_within_seconds=3600)
+        with patch("WebServer.eventlog.time.time", return_value=1000.0 + 3600):
+            log.record({'code': 'X'}, merge_within_seconds=3600)
+            self.assertEqual(len(log.entries_within()), 2)
+
+    def test_different_fields_are_not_merged(self):
+        log = EventLog('events.json')
+        log.record({'code': 'X', 'message': 'a'}, merge_within_seconds=3600)
+        log.record({'code': 'X', 'message': 'b'}, merge_within_seconds=3600)
+
+        self.assertEqual(len(log.entries_within()), 2)
+
+    def test_without_merge_window_every_record_is_a_new_entry(self):
+        """The notification log counts each sent message - it must keep
+        recording every single one."""
+        log = EventLog('events.json')
+        log.record({})
+        log.record({})
+
+        self.assertEqual(len(log.entries_within()), 2)
+
+    def test_stream_to_sends_the_raw_file_in_small_chunks(self):
+        """A full log is ~17 KB - the download must never need it in RAM
+        as one piece (the ESP32 can't reliably allocate that)."""
+        log = EventLog('events.json')
+        for i in range(100):
+            log.record({'code': 'E%d' % i, 'message': 'x' * 50})
+        chunks = []
+
+        log.stream_to(chunks.append, chunk_size=256)
+
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(c) <= 256 for c in chunks))
+        with open('events.json', 'rb') as f:
+            self.assertEqual(b''.join(chunks), f.read())
+
+    def test_stream_to_without_file_sends_an_empty_json_list(self):
+        chunks = []
+        EventLog('missing.json').stream_to(chunks.append)
+
+        self.assertEqual(b''.join(chunks), b'[]')
+
     def test_entry_count_is_capped_regardless_of_age(self):
         """Regression target: a crash loop or notification burst must not
         grow the log (and its JSON parse/dump cost) without bound."""
