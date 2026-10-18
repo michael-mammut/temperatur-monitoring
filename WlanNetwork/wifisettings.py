@@ -1,5 +1,7 @@
 import ujson
 
+from WebServer.jsonfile import load_dict
+
 _PATH = 'wifi_settings.json'
 
 # WPA2-PSK passphrases are 8-63 ASCII characters (IEEE 802.11i); an empty
@@ -25,13 +27,10 @@ class WifiSettings:
     def __init__(self, default_ssid, default_password):
         self._ssid = default_ssid
         self._password = default_password
-        try:
-            with open(_PATH) as f:
-                data = ujson.load(f)
-            self._ssid = data.get('ssid', default_ssid)
-            self._password = data.get('password', default_password)
-        except OSError:
-            pass  # no override file yet, keep the defaults from config.py
+        data = load_dict(_PATH)  # None: no override file yet, or unreadable
+        if data is not None and isinstance(data.get('ssid'), str) and isinstance(data.get('password'), str):
+            self._ssid = data['ssid']
+            self._password = data['password']
 
     def get_ssid(self):
         return self._ssid

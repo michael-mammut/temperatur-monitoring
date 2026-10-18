@@ -1,5 +1,7 @@
 import ujson
 
+from WebServer.jsonfile import load_dict
+
 from WebServer.datetimeformat import (
     CULTURES, DEFAULT_CULTURE, DEFAULT_UTC_OFFSET_MINUTES, VALID_OFFSET_MINUTES,
 )
@@ -20,18 +22,17 @@ class DateTimeSettings:
         self._culture = DEFAULT_CULTURE
         self._utc_offset_minutes = DEFAULT_UTC_OFFSET_MINUTES
         self._eu_summer_time = DEFAULT_EU_SUMMER_TIME
-        try:
-            with open(_PATH) as f:
-                data = ujson.load(f)
-            culture = data.get('culture')
-            if culture in CULTURES:
-                self._culture = culture
-            offset = data.get('utc_offset_minutes')
-            if offset in VALID_OFFSET_MINUTES:
-                self._utc_offset_minutes = offset
-            self._eu_summer_time = bool(data.get('eu_summer_time', DEFAULT_EU_SUMMER_TIME))
-        except (OSError, ValueError):
-            pass  # no override file yet, keep the defaults
+        data = load_dict(_PATH)  # None: no override file yet, or unreadable
+        if data is None:
+            return
+        culture = data.get('culture')
+        if culture in CULTURES:
+            self._culture = culture
+        offset = data.get('utc_offset_minutes')
+        if offset in VALID_OFFSET_MINUTES:
+            self._utc_offset_minutes = offset
+        if isinstance(data.get('eu_summer_time'), bool):  # bool("false") would be True
+            self._eu_summer_time = data['eu_summer_time']
 
     def get_culture(self):
         return self._culture

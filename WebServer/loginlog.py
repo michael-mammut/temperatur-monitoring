@@ -1,6 +1,8 @@
 import time
 import ujson
 
+from WebServer.jsonfile import load_dict
+
 _PATH = 'last_login.json'
 
 
@@ -12,11 +14,9 @@ class LoginLog:
 
     def __init__(self):
         self._last_login = None
-        try:
-            with open(_PATH) as f:
-                self._last_login = ujson.load(f).get('timestamp')
-        except (OSError, ValueError):
-            pass
+        data = load_dict(_PATH)
+        if data is not None and isinstance(data.get('timestamp'), (int, float)):
+            self._last_login = data['timestamp']
 
     def get_last_login(self):
         return self._last_login

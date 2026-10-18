@@ -1,6 +1,7 @@
 import ujson
 
 from WebServer.errorlog import ALL_CATEGORIES
+from WebServer.jsonfile import load_dict
 
 _PATH = 'logging_settings.json'
 
@@ -13,14 +14,12 @@ class LoggingSettings:
 
     def __init__(self):
         self._enabled = {category: True for category in ALL_CATEGORIES}
-        try:
-            with open(_PATH) as f:
-                data = ujson.load(f)
-            for category in ALL_CATEGORIES:
-                if category in data:
-                    self._enabled[category] = bool(data[category])
-        except (OSError, ValueError):
-            pass  # no override file yet, keep everything enabled
+        data = load_dict(_PATH)  # None: no override file yet, or unreadable
+        if data is None:
+            return
+        for category in ALL_CATEGORIES:
+            if isinstance(data.get(category), bool):
+                self._enabled[category] = data[category]
 
     def is_enabled(self, category):
         return self._enabled.get(category, True)

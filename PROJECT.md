@@ -149,6 +149,14 @@ frei kein 2-KB-Block mehr übrig war. Abhilfe: `main.py` ist jetzt ein
 Starter, der während der Imports `gc.threshold()` setzt, das Programm
 selbst liegt in `aquarium.py` (vorkompiliert), und jede Seite reicht das
 CSS als eigenes Stück durch, statt es per `.format()` zu kopieren.
+Aus dem Code-Review (#2–#4): Eine kaputte Einstellungs-Datei — am
+realistischsten eine halb geschriebene `wifi_settings.json`, weil direkt
+nach dem Speichern neu gestartet wird — ließ den Start abstürzen, bevor
+WLAN oder Web-Oberfläche liefen; nur ein USB-Neuflash half. Alle
+Einstellungs-Klassen laden jetzt über eine gemeinsame Funktion
+(`WebServer/jsonfile.py`) und fallen bei kaputtem Inhalt oder falschen
+Werttypen auf ihre Standardwerte zurück; auf dem Board mit absichtlich
+zerstörten Dateien geprüft.
 
 ## Wie KI in diesem Projekt eingesetzt wird
 
@@ -186,6 +194,7 @@ echte Hardware zu benötigen.
 | [test_temperature.py](tests/test_temperature.py) | 6 | Sensor-Mittelwertbildung, Absturzsicherheit bei Lesefehlern, Fehlerprotokollierung |
 | [test_wlanconnection.py](tests/test_wlanconnection.py) | 12 | WLAN-Verbindung, DHCP-Hostname, NTP-Zeitsync-Retry, Netzwerk-Scan (inkl. 30s-Cache), Signalstärke, Fehlerprotokollierung |
 | [test_deploy.py](tests/test_deploy.py) | 13 | Deploy-Skript: welche Dateien zu `.mpy` kompiliert werden (nicht `boot.py`/`main.py`/`config.py`), Löschen alter `.py` auf dem Board, Compiler-Wahl je Firmware, Vollständigkeit der Übertragungsliste, echter v5-Compiler-Lauf (falls installiert) |
+| [test_corrupt_settings_files.py](tests/test_corrupt_settings_files.py) | 18 | Kaputte/halb geschriebene/falsch aufgebaute Einstellungs- und Log-Dateien sowie Werte vom falschen Typ führen bei allen Klassen zu Standardwerten statt zu einem Absturz beim Start (Code-Review #2–#4) |
 | [test_settings.py](tests/test_settings.py) | 3 | Persistenz des Aquarium-Namens über Neustarts |
 | [test_setupmode.py](tests/test_setupmode.py) | 15 | Wann das Einrichtungs-WLAN auf-/zugeht (inkl. DNS-Polling nur solange aktiv): ohne Zugangsdaten, nach doppeltem RESET (10-min-Zeitlimit, nicht solange jemand verbunden ist), Fallback nach 5 min offline inkl. Heim-WLAN-Retry höchstens 1×/min und nie bei verbundenem Client |
 | [test_doublereset.py](tests/test_doublereset.py) | 5 | Erkennung des doppelten RESET-Drucks, einmaliges Abholen der Anforderung, keine Marker-Reste bei unterbrochenem Boot |
@@ -203,7 +212,7 @@ echte Hardware zu benötigen.
 | [test_datetimeformat.py](tests/test_datetimeformat.py) | 34 | Datums-/Zeit-Formatierung je Country/Culture (Tag/Monat-Reihenfolge, 12h-/24h-Anzeige inkl. Mitternacht/Mittag), Fallback auf ISO 8601 bei unbekannter Culture, UTC-Offset-Verschiebung inkl. Tages-/Monats-/Jahres-/Schaltjahr-Übertrag, Halb-/Viertelstunden-Offsets, EU-Sommerzeit-Umstellung (Übergangs-Instant auf die Sekunde, inkl. Schaltjahr) |
 | [test_datetimesettings.py](tests/test_datetimesettings.py) | 8 | Persistenz + Validierung der gewählten Culture, des UTC-Offsets und der EU-Sommerzeit-Checkbox, Fallback bei veralteter/ungültiger/fehlender gespeicherter Culture bzw. Offset bzw. Sommerzeit-Flag |
 
-**Gesamt: 317 Tests**, Stand des letzten vollständigen Durchlaufs in diesem
+**Gesamt: 335 Tests**, Stand des letzten vollständigen Durchlaufs in diesem
 Dokument. Viele Tests sind als Regressionstests für konkret auf der
 Hardware beobachtete Bugs angelegt (siehe Docstrings in den jeweiligen
 Testdateien) — sie beschreiben bewusst, *welches reale Problem* sie

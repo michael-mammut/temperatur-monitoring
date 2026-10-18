@@ -17,9 +17,13 @@ class EventLog:
         self._entries = []
         try:
             with open(self._path) as f:
-                self._entries = ujson.load(f)
+                data = ujson.load(f)
         except (OSError, ValueError):
-            self._entries = []
+            return  # no log yet, or unreadable (e.g. half-written at a power cut)
+        # Anything but a list of objects would crash the first record() or
+        # page render - keep only the usable entries.
+        if isinstance(data, list):
+            self._entries = [entry for entry in data if isinstance(entry, dict)]
 
     def record(self, data, merge_within_seconds=None):
         """With merge_within_seconds, an identical entry (same fields)

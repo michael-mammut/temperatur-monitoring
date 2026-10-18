@@ -1,5 +1,7 @@
 import ujson
 
+from WebServer.jsonfile import load_dict
+
 _PATH = 'monitoring_settings.json'
 
 MIN_WARNING_PERCENT = 5
@@ -16,14 +18,14 @@ class MonitoringSettings:
         self._ram_percent = default_ram_percent
         self._storage_percent = default_storage_percent
         self._log_storage_percent = default_log_storage_percent
-        try:
-            with open(_PATH) as f:
-                data = ujson.load(f)
-            self._ram_percent = data.get('ram_percent', default_ram_percent)
-            self._storage_percent = data.get('storage_percent', default_storage_percent)
-            self._log_storage_percent = data.get('log_storage_percent', default_log_storage_percent)
-        except (OSError, ValueError):
-            pass  # no override file yet, keep the defaults from config.py
+        data = load_dict(_PATH)  # None: no override file yet, or unreadable
+        if data is None:
+            return
+        # Same check as for values entered on /settings - a non-number here
+        # would make every RAM/Flash check of the main loop fail.
+        self._ram_percent = _valid_or(data.get('ram_percent'), default_ram_percent)
+        self._storage_percent = _valid_or(data.get('storage_percent'), default_storage_percent)
+        self._log_storage_percent = _valid_or(data.get('log_storage_percent'), default_log_storage_percent)
 
     def get_ram_percent(self):
         return self._ram_percent
@@ -44,6 +46,11 @@ class MonitoringSettings:
                 'storage_percent': storage_percent,
                 'log_storage_percent': log_storage_percent,
             }, f)
+
+
+def _valid_or(value, default):
+    error, number = validate_percent(value)
+    return default if error else number
 
 
 def validate_percent(value):

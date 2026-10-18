@@ -70,6 +70,7 @@ FILES = [
     "WebServer/pages/statistics.py",
     "WebServer/settings.py",
     "WebServer/eventlog.py",
+    "WebServer/jsonfile.py",
     "WebServer/errorlog.py",
     "WebServer/loggingsettings.py",
     "WebServer/loginlog.py",

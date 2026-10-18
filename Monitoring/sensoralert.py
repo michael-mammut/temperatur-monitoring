@@ -2,6 +2,7 @@ import time
 import ujson
 
 from Temperature.temperature import SENSOR_ERROR
+from WebServer.jsonfile import load_dict
 
 _PATH = 'sensor_alert_settings.json'
 
@@ -26,14 +27,9 @@ class SensorAlertSettings:
 
     def __init__(self):
         self._enabled = True
-        try:
-            with open(_PATH) as f:
-                data = ujson.load(f)
-            value = data.get('enabled', True)
-            if isinstance(value, bool):
-                self._enabled = value
-        except (OSError, ValueError, AttributeError):
-            pass  # no/corrupt file, keep the default
+        data = load_dict(_PATH)  # None: no file yet, or unreadable
+        if data is not None and isinstance(data.get('enabled'), bool):
+            self._enabled = data['enabled']
 
     def is_enabled(self):
         return self._enabled

@@ -1,5 +1,7 @@
 import ujson
 
+from WebServer.jsonfile import load_dict
+
 _PATH = 'aquarium_settings.json'
 
 
@@ -10,12 +12,9 @@ class Settings:
 
     def __init__(self, default_name):
         self._name = default_name
-        try:
-            with open(_PATH) as f:
-                data = ujson.load(f)
-            self._name = data.get('name', default_name)
-        except OSError:
-            pass  # no settings file yet, keep the default
+        data = load_dict(_PATH)  # None: no settings file yet, or unreadable
+        if data is not None and isinstance(data.get('name'), str) and data['name'].strip():
+            self._name = data['name']
 
     def get_name(self):
         return self._name

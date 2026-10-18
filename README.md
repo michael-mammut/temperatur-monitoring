@@ -216,6 +216,7 @@ sequenceDiagram
 | [WebServer/pages/statistics.py](WebServer/pages/statistics.py) | Statistik (`/statistics`) |
 | [WebServer/webstyle.py](WebServer/webstyle.py) | Gemeinsames CSS (hell/dunkel) für alle vier Seiten |
 | [WebServer/settings.py](WebServer/settings.py) | Persistiert den Aquarium-Namen |
+| [WebServer/jsonfile.py](WebServer/jsonfile.py) | `load_dict()`: lädt eine Einstellungs-Datei so, dass eine fehlende, halb geschriebene (Stromausfall) oder falsch aufgebaute Datei `None` ergibt statt den Start abstürzen zu lassen — alle Einstellungs-Klassen fallen dann auf ihre Standardwerte zurück |
 | [WlanNetwork/wifisettings.py](WlanNetwork/wifisettings.py) | Persistiert WLAN-Zugangsdaten, die über `/wifi-settings` geändert wurden |
 | [WebServer/eventlog.py](WebServer/eventlog.py) | Persistierter, auf 200 Einträge begrenzter Event-Log (Basis für Fehler- und Benachrichtigungs-Protokoll); gleiche Fehler innerhalb von 12 h werden zu einem Eintrag mit Zähler zusammengefasst (`record(..., merge_within_seconds=...)`), damit ein dauerhaft defekter Sensor das Log nicht vollschreibt (200 Einträge belegen ~24 KB RAM auf dem ESP32, gemessen); enthält auch `enforce_storage_budget()` (hält Logs zusammen unter einem Anteil des *verfügbaren* Speichers, nicht der Gesamtkapazität) |
 | [WebServer/errorlog.py](WebServer/errorlog.py) | Fehlerkategorien (System/Hardware/Netzwerk/Externe APIs) + Hilfsfunktion zum Mitschreiben einer Exception |
