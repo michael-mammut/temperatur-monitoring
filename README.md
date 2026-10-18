@@ -327,6 +327,20 @@ Keine Secrets, daher regulär in Git. Werte sind auch über `/settings` zur Lauf
 
 ## Web-Oberfläche
 
+<table>
+<tr>
+<td align="center"><img src="docs/screenshots/status.png" width="250" alt="Statusseite"><br><code>/</code></td>
+<td align="center"><img src="docs/screenshots/wifi-settings.png" width="250" alt="WLAN-Einstellungen"><br><code>/wifi-settings</code></td>
+<td align="center"><img src="docs/screenshots/datetime-settings.png" width="250" alt="Datum-/Zeit-Einstellungen"><br><code>/datetime-settings</code></td>
+</tr>
+<tr>
+<td align="center" valign="top"><img src="docs/screenshots/settings.png" width="250" alt="Einstellungen"><br><code>/settings</code></td>
+<td align="center" valign="top" colspan="2"><img src="docs/screenshots/statistics.png" width="250" alt="Statistik"><br><code>/statistics</code></td>
+</tr>
+</table>
+
+Die Bilder zeigen Beispieldaten und werden mit [scripts/render_ui_screenshots.py](scripts/render_ui_screenshots.py) aus dem echten Seiten-Code erzeugt (headless Google Chrome, kein Board nötig) — nach Änderungen an der Oberfläche einfach `python3 scripts/render_ui_screenshots.py` ausführen.
+
 | URL | Zugriff | Zweck |
 |---|---|---|
 | `http://<IP>/` | öffentlich | Temperaturen, Online-Status, Zeitstempel der letzten Messung |
