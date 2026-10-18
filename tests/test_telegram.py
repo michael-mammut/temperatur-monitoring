@@ -11,115 +11,119 @@ import micropython_mocks
 micropython_mocks.install()
 
 from Notification import config as notification_config
+from Notification import telegram as telegram_module
 from Notification.telegram import Telegram
 
 
-class NotifyClosesResponseTests(unittest.TestCase):
-    """Regression tests for the socket/memory leak: every urequests response
-    must be closed, on both the success and the failure path."""
+def _response(status=200):
+    response = MagicMock()
+    response.status_code = status
+    return response
 
-    def test_successful_request_closes_response(self):
-        telegram = Telegram("Vorzimmer")
-        fake_response = MagicMock()
-        fake_response.json.return_value = {"ok": True}
 
-        with patch("Notification.telegram.urequests.post", return_value=fake_response) as post_mock:
-            telegram.notify("hello")
+class _Patched:
+    """Patches the reachability check and urequests.post for one test."""
 
-        post_mock.assert_called_once()
-        fake_response.close.assert_called_once()
+    def __init__(self, post_side_effect=None, status=200, reachable_error=None):
+        self.post_side_effect = post_side_effect
+        self.status = status
+        self.reachable_error = reachable_error
 
+    def __enter__(self):
+        self.response = _response(self.status)
+        self._check = patch("Notification.telegram.check_reachable", side_effect=self.reachable_error)
+        self._post = patch("Notification.telegram.urequests.post", return_value=self.response,
+                           side_effect=self.post_side_effect)
+        self.check = self._check.start()
+        self.post = self._post.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._post.stop()
+        self._check.stop()
+
+
+class NotifyRequestTests(unittest.TestCase):
     def test_message_is_sent_as_json_body_not_raw_query_string(self):
         """Regression test: the message used to be concatenated unescaped
         into a GET query string ('&text=' + message). Telegram's nginx
         front-end rejects a raw space/°/comma in the request line with a
         plain 400 Bad Request, so every single notification silently failed.
         Sending it as a POST JSON body avoids any URL-encoding issue."""
-        telegram = Telegram("Vorzimmer")
-        fake_response = MagicMock()
-        fake_response.json.return_value = {"ok": True}
+        with _Patched() as p:
+            Telegram("Vorzimmer").notify("Vorzimmer - Wassertemperatur: 21.5°C, Umgebungstemperatur 22.0°C")
 
-        with patch("Notification.telegram.urequests.post", return_value=fake_response) as post_mock:
-            telegram.notify("Vorzimmer - Wassertemperatur: 21.5°C, Umgebungstemperatur 22.0°C")
-
-        args, kwargs = post_mock.call_args
-        self.assertNotIn(" ", args[0])  # URL itself has no query string at all
+        args, kwargs = p.post.call_args
+        self.assertTrue(args[0].startswith("https://api.telegram.org/bot"))
+        self.assertNotIn(" ", args[0])  # no query string at all
         self.assertEqual(kwargs["headers"]["Content-Type"], "application/json")
-        body = json.loads(kwargs["data"])
-        self.assertEqual(
-            body["text"],
-            "Vorzimmer - Wassertemperatur: 21.5°C, Umgebungstemperatur 22.0°C",
-        )
+        self.assertEqual(json.loads(kwargs["data"])["text"],
+                         "Vorzimmer - Wassertemperatur: 21.5°C, Umgebungstemperatur 22.0°C")
 
     def test_body_is_encoded_as_utf8_bytes_not_character_count(self):
         """Regression test found on real hardware: urequests' json= kwarg
         sizes Content-Length by character count, not UTF-8 byte count. A
-        message with multi-byte characters like "°" then gets truncated at
-        the transport layer, silently dropping the trailing chat_id field
-        and making Telegram reject the request as "chat_id is empty".
-        Encoding to bytes ourselves must make body length == UTF-8 byte
-        length, not Python string length."""
-        telegram = Telegram("Vorzimmer")
-        fake_response = MagicMock()
-        fake_response.json.return_value = {"ok": True}
+        message with "°" then got truncated, silently dropping chat_id."""
         message = "Neustart - Vorzimmer - Wassertemperatur: -999°C, Umgebungstemperatur -999°C"
+        with _Patched() as p:
+            Telegram("Vorzimmer").notify(message)
 
-        with patch("Notification.telegram.urequests.post", return_value=fake_response) as post_mock:
-            telegram.notify(message)
-
-        _, kwargs = post_mock.call_args
-        body = kwargs["data"]
-        expected = {"chat_id": "-" + notification_config.CHAT_ID, "text": message}
-        expected_str = json.dumps(expected, ensure_ascii=False)  # matches MicroPython's ujson.dumps
+        body = p.post.call_args[1]["data"]
+        expected = json.dumps({"chat_id": "-" + notification_config.CHAT_ID, "text": message}, ensure_ascii=False)
         self.assertIsInstance(body, bytes)
-        self.assertEqual(len(body), len(expected_str.encode("utf-8")))
-        self.assertNotEqual(len(body), len(expected_str))  # UTF-8 bytes != character count for "°"
+        self.assertEqual(len(body), len(expected.encode("utf-8")))
+        self.assertNotEqual(len(body), len(expected))
 
-    def test_failed_request_still_closes_response(self):
-        telegram = Telegram("Vorzimmer")
-        fake_response = MagicMock()
-        fake_response.json.side_effect = ValueError("invalid json")
+    def test_response_is_closed(self):
+        with _Patched() as p:
+            Telegram("Vorzimmer").notify("hello")
 
-        with patch("Notification.telegram.urequests.post", return_value=fake_response):
-            telegram.notify("hello")  # must not raise
-
-        fake_response.close.assert_called_once()
+        p.response.close.assert_called_once()
 
     def test_connection_error_does_not_crash(self):
-        telegram = Telegram("Vorzimmer")
-
-        with patch("Notification.telegram.urequests.post", side_effect=OSError("no route to host")):
-            telegram.notify("hello")  # must not raise, no response to close
+        with _Patched(post_side_effect=OSError("no route to host")):
+            Telegram("Vorzimmer").notify("hello")  # must not raise
 
     def test_successful_send_is_recorded_in_the_notification_log(self):
         fake_notification_log = MagicMock()
-        telegram = Telegram("Vorzimmer", notification_log=fake_notification_log)
-        fake_response = MagicMock()
-        fake_response.json.return_value = {"ok": True}
-
-        with patch("Notification.telegram.urequests.post", return_value=fake_response):
-            telegram.notify("hello")
+        with _Patched():
+            Telegram("Vorzimmer", notification_log=fake_notification_log).notify("hello")
 
         fake_notification_log.record.assert_called_once()
 
     def test_failed_send_is_not_recorded_in_the_notification_log(self):
         fake_notification_log = MagicMock()
-        telegram = Telegram("Vorzimmer", notification_log=fake_notification_log)
-
-        with patch("Notification.telegram.urequests.post", side_effect=OSError("no route to host")):
-            telegram.notify("hello")
+        with _Patched(post_side_effect=OSError("no route to host")):
+            Telegram("Vorzimmer", notification_log=fake_notification_log).notify("hello")
 
         fake_notification_log.record.assert_not_called()
 
     def test_failed_send_is_recorded_in_the_error_log(self):
         fake_error_log = MagicMock()
-        telegram = Telegram("Vorzimmer", error_log=fake_error_log)
-
-        with patch("Notification.telegram.urequests.post", side_effect=OSError("no route to host")):
-            telegram.notify("hello")
+        with _Patched(post_side_effect=OSError("no route to host")):
+            Telegram("Vorzimmer", error_log=fake_error_log).notify("hello")
 
         fake_error_log.record.assert_called_once()
         self.assertEqual(fake_error_log.record.call_args[0][0]['category'], 'external_api')
+
+    def test_non_200_answer_counts_as_failure(self):
+        """E.g. a wrong chat id: Telegram answers 400 - that used to be
+        treated as a successful send."""
+        fake_error_log = MagicMock()
+        with _Patched(status=400):
+            result = Telegram("Vorzimmer", error_log=fake_error_log).notify("hello")
+
+        self.assertFalse(result)
+        self.assertIn("400", fake_error_log.record.call_args[0][0]['message'])
+
+    def test_unreachable_telegram_is_not_requested_at_all(self):
+        """The time-limited check runs first - urequests itself would block
+        for 18 s in connect() (measured on the device)."""
+        with _Patched(reachable_error=OSError("Telegram: keine Verbindung")) as p:
+            result = Telegram("Vorzimmer").notify("hello")
+
+        self.assertFalse(result)
+        p.post.assert_not_called()
 
 
 class NotifyResultTests(unittest.TestCase):
@@ -127,14 +131,107 @@ class NotifyResultTests(unittest.TestCase):
     failed - notify() has to tell it."""
 
     def test_successful_send_returns_true(self):
-        fake_response = MagicMock()
-        fake_response.json.return_value = {"ok": True}
-        with patch("Notification.telegram.urequests.post", return_value=fake_response):
+        with _Patched():
             self.assertTrue(Telegram("Vorzimmer").notify("hello"))
 
     def test_failed_send_returns_false(self):
-        with patch("Notification.telegram.urequests.post", side_effect=OSError("no route to host")):
+        with _Patched(post_side_effect=OSError("no route to host")):
             self.assertFalse(Telegram("Vorzimmer").notify("hello"))
+
+
+class RetryPauseTests(unittest.TestCase):
+    def setUp(self):
+        self.now = 0
+        p = patch("Notification.telegram.time.ticks_ms", side_effect=lambda: self.now)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_no_new_attempt_within_the_pause_after_a_failure(self):
+        """Otherwise every notification in the same loop iteration would
+        wait out its own timeout while the internet is down."""
+        telegram = Telegram("Vorzimmer")
+        with _Patched(reachable_error=OSError("timeout")) as p:
+            telegram.notify("a")
+            self.now += telegram_module.RETRY_AFTER_FAILURE_MS - 1
+            self.assertFalse(telegram.notify("b"))
+        self.assertEqual(p.check.call_count, 1)
+
+    def test_tries_again_after_the_pause(self):
+        telegram = Telegram("Vorzimmer")
+        with _Patched(reachable_error=OSError("timeout")):
+            telegram.notify("a")
+        self.now += telegram_module.RETRY_AFTER_FAILURE_MS
+        with _Patched() as p:
+            self.assertTrue(telegram.notify("b"))
+        p.post.assert_called_once()
+
+
+class _FakeSocket:
+    def __init__(self, connect_error=None):
+        self.connect_error = connect_error
+        self.closed = False
+
+    def setblocking(self, flag):
+        pass
+
+    def connect(self, address):
+        if self.connect_error is not None:
+            raise self.connect_error
+
+    def close(self):
+        self.closed = True
+
+
+class CheckReachableTests(unittest.TestCase):
+    def setUp(self):
+        telegram_module._address_cache.clear()
+        self.addCleanup(telegram_module._address_cache.clear)
+        self.sock = _FakeSocket(connect_error=OSError(telegram_module.errno.EINPROGRESS))
+        self.poller = MagicMock()
+        self.poller.poll.return_value = [(self.sock, telegram_module.select.POLLOUT)]
+        for target, kwargs in (
+                ("Notification.telegram.socket.socket", {"return_value": self.sock}),
+                ("Notification.telegram.socket.getaddrinfo", {"return_value": [(0, 0, 0, "", ("1.2.3.4", 443))]}),
+                ("Notification.telegram.select.poll", {"return_value": self.poller})):
+            p = patch(target, **kwargs)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_reachable_host_passes_and_socket_is_closed(self):
+        telegram_module.check_reachable("api.telegram.org")
+
+        self.assertTrue(self.sock.closed)
+
+    def test_waits_at_most_the_connect_timeout(self):
+        """Regression test from real hardware: with the internet down, a
+        blocking connect() took 18 s (settimeout() is ignored there) -
+        longer than the 15 s watchdog, so the board rebooted every ~22 s."""
+        self.poller.poll.return_value = []  # nothing within the timeout
+
+        with self.assertRaises(OSError):
+            telegram_module.check_reachable("api.telegram.org")
+
+        self.poller.poll.assert_called_once_with(telegram_module.CONNECT_TIMEOUT_MS)
+        self.assertTrue(self.sock.closed)
+
+    def test_address_is_resolved_once_and_reused(self):
+        telegram_module.check_reachable("api.telegram.org")
+        telegram_module.check_reachable("api.telegram.org")
+
+        self.assertEqual(telegram_module.socket.getaddrinfo.call_count, 1)
+
+    def test_failure_drops_the_cached_address(self):
+        self.poller.poll.return_value = []
+        with self.assertRaises(OSError):
+            telegram_module.check_reachable("api.telegram.org")
+
+        self.assertNotIn("api.telegram.org", telegram_module._address_cache)
+
+    def test_immediate_connect_error_is_raised(self):
+        self.sock.connect_error = OSError(113)  # EHOSTUNREACH, not "in progress"
+
+        with self.assertRaises(OSError):
+            telegram_module.check_reachable("api.telegram.org")
 
 
 class NotificationTimingTests(unittest.TestCase):

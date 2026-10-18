@@ -22,6 +22,9 @@ _PROTECTED_PATHS = ('/settings', '/wifi-settings', '/statistics', '/datetime-set
 # makes the browser save it as a file instead of displaying it.
 ERROR_LOG_PATH = '/error-log.json'
 
+_HTML_HEAD = b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n"
+_SEND_SLICE_CHARS = 512
+
 # One retry after a MemoryError (see _render_with_retry): the first
 # attempt plus one more after an extra gc.collect().
 _MAX_RENDER_ATTEMPTS = 2
@@ -61,6 +64,7 @@ class WebServer:
         should_reset = False
         try:
             client.settimeout(2)
+            gc.collect()  # the receive buffer below is one 2 KB block
             method, path, headers, body = self._parse_request(client.recv(_MAX_REQUEST_BYTES))
 
             route, _, query = path.partition('?')
@@ -72,14 +76,20 @@ class WebServer:
                     client.send(self._unauthorized_response().encode('utf-8'))
                 return
 
-            if path in _PROTECTED_PATHS and not self._is_authorized(headers):
+            redirect_location = self._setup_redirect(monitor, path, headers)
+            if redirect_location is not None:
+                response = self._redirect_response(redirect_location)
+            elif path in _PROTECTED_PATHS and not self._is_authorized(headers):
                 response = self._unauthorized_response()
             else:
                 previous_login = self._record_login() if path in _PROTECTED_PATHS else None
                 html, should_reset = self._render_with_retry(monitor, method, path, body, previous_login)
-                response = self._html_response(html)
+                response = None
 
-            client.send(response.encode('utf-8'))
+            if response is None:
+                self._send_html(client, html)
+            else:
+                client.send(response.encode('utf-8'))
             if should_reset:
                 # Give the socket a moment to actually flush the confirmation
                 # page to the client before the device reboots to apply the
@@ -134,36 +144,38 @@ class WebServer:
         if path == '/settings' and method == 'POST':
             html = settings_page.handle_post(self, monitor, body)
         elif path == '/settings':
-            html = self.render_settings()
+            html = settings_page.render(self)
         elif path == '/wifi-settings' and method == 'POST':
             html, should_reset = wifisettings_page.handle_post(self, monitor, body)
         elif path == '/wifi-settings':
-            html = self.render_wifi_settings(monitor)
+            html = wifisettings_page.render(self, monitor)
         elif path == '/statistics' and method == 'POST':
             html = statistics_page.handle_post(self, monitor, body, previous_login)
         elif path == '/statistics':
-            html = self.render_statistics(monitor, previous_login)
+            html = statistics_page.render(self, monitor, previous_login)
         elif path == '/datetime-settings' and method == 'POST':
             html = datetimesettings_page.handle_post(self, body)
         elif path == '/datetime-settings':
-            html = self.render_datetime_settings()
+            html = datetimesettings_page.render_parts(self)
         else:
-            html = self.render(monitor)
+            html = status_page.render(self, monitor)
         return html, should_reset
 
-    # -- page rendering (thin delegators to WebServer/pages/*) -------------
+    # -- page rendering as one string (for tests and debugging) ------------
+    # Pages return lists of pieces (see webstyle.html_parts); serving them
+    # goes through _dispatch()/_send_html() without ever joining them.
 
     def render(self, monitor):
-        return status_page.render(self, monitor)
+        return ''.join(status_page.render(self, monitor))
 
     def render_settings(self, saved=False, error=None):
-        return settings_page.render(self, saved=saved, error=error)
+        return ''.join(settings_page.render(self, saved=saved, error=error))
 
     def render_wifi_settings(self, monitor, saved=False, error=None, ssid=None):
-        return wifisettings_page.render(self, monitor, saved=saved, error=error, ssid=ssid)
+        return ''.join(wifisettings_page.render(self, monitor, saved=saved, error=error, ssid=ssid))
 
     def render_statistics(self, monitor, previous_login, message=None):
-        return statistics_page.render(self, monitor, previous_login, message=message)
+        return ''.join(statistics_page.render(self, monitor, previous_login, message=message))
 
     def render_datetime_settings(self, saved=False, error=None):
         return datetimesettings_page.render(self, saved=saved, error=error)
@@ -188,6 +200,22 @@ class WebServer:
     def _escape_html(self, value):
         return (value.replace('&', '&amp;').replace('<', '&lt;')
                 .replace('>', '&gt;').replace('"', '&quot;'))
+
+    def _setup_redirect(self, monitor, path, headers):
+        # While the setup WiFi network is up, http://captain-nemo-setup/
+        # goes straight to the WiFi page, and so does every request for a
+        # foreign host (WlanNetwork/dnsserver.py resolves every name to us,
+        # e.g. a phone's connectivity check - which then opens the page).
+        network_setup = getattr(monitor, 'network_setup', None)
+        if network_setup is None or not network_setup.is_active():
+            return None
+        from WlanNetwork.accesspoint import AP_HOSTNAME, AP_IP
+        host = headers.get('host', '').split(':')[0].lower()
+        if host not in (AP_HOSTNAME, AP_IP):
+            return 'http://%s/wifi-settings' % AP_HOSTNAME
+        if host == AP_HOSTNAME and path == '/':
+            return '/wifi-settings'
+        return None
 
     # -- authentication --------------------------------------------------
 
@@ -237,12 +265,24 @@ class WebServer:
         else:
             self._error_log.stream_to(client.sendall)
 
-    def _html_response(self, body):
+    def _redirect_response(self, location):
         return (
-            "HTTP/1.1 200 OK\r\n"
-            "Content-Type: text/html; charset=utf-8\r\n"
-            "Connection: close\r\n\r\n" + body
+            "HTTP/1.1 302 Found\r\n"
+            "Location: " + location + "\r\n"
+            "Content-Length: 0\r\n"
+            "Connection: close\r\n\r\n"
         )
+
+    def _send_html(self, client, html):
+        # Headers and page sent separately, the page encoded in small
+        # slices: "headers + page" and its .encode() would each be another
+        # full copy of the page in one piece - on the ESP32's fragmented
+        # heap exactly the kind of allocation that fails. `html` is a
+        # string or a list of pieces (see pages/datetimesettings.py).
+        client.sendall(_HTML_HEAD)
+        for part in ((html,) if isinstance(html, str) else html):
+            for i in range(0, len(part), _SEND_SLICE_CHARS):
+                client.sendall(part[i:i + _SEND_SLICE_CHARS].encode('utf-8'))
 
     # -- request parsing --------------------------------------------------
 

@@ -118,6 +118,37 @@ jede Seite inkl. `/` mit `MemoryError` scheiterte. Gleiche Fehler
 innerhalb von 12 h werden seither zu einem Eintrag mit Zähler
 zusammengefasst. Die Rohdaten des Fehler-Logs lassen sich über
 `/error-log.json` ansehen oder herunterladen.
+Dazu ein eigenes Einrichtungs-WLAN (`Captain-Nemo-Setup`), über das man
+dem Gerät ohne USB-Kabel ein neues Heim-WLAN zuweisen kann — automatisch
+ohne gespeicherte Zugangsdaten oder nach 5 min ohne Heim-WLAN, manuell
+per doppeltem RESET-Druck (ein einzelner Druck ist für den ESP32 nicht
+von einem Stromausfall zu unterscheiden); die LED blinkt währenddessen
+im Sekundentakt. Ein kleiner DNS-Server beantwortet im Einrichtungs-WLAN
+jede Anfrage mit der eigenen IP, sodass `http://captain-nemo-setup/`
+direkt auf die WLAN-Einstellungen führt. Dabei im Deploy-Skript eine
+fehlende Datei (`WebServer/pages/datetimesettings.py`) in der
+Übertragungsliste gefunden, die einen kompletten Neu-Deploy auf ein
+leeres Board beim Start hätte abstürzen lassen. Auf dem ESP32 ohne
+PSRAM reichte der Speicher danach mit keiner Firmware mehr: Auf 1.16
+zersplitterte das Übersetzen des Quellcodes auf dem Board den Heap so,
+dass keine Seite mehr renderte; auf 1.29 nimmt der wachsende Python-Heap
+dem WLAN-/TLS-Speicher so viel weg, dass der Telegram-Aufruf hängt (beides
+auf echter Hardware gemessen). Lösung: zurück auf 1.16, das Deploy-Skript
+kompiliert die Module jetzt vorab zu `.mpy`, und große Seiten werden in
+kleinen Stücken gesendet statt am Stück im RAM zusammengebaut.
+Zusätzlich ein Zeitlimit für Telegram: Bei Internet-Ausfall (WLAN noch da)
+blockierte der Versand die Hauptschleife 18 s und das Board startete per
+Watchdog alle ~22 s neu — jetzt bricht ein zeitbegrenzter
+Verbindungstest nach 5 s ab, danach pausiert Telegram 5 min, und der
+Watchdog wird zwischen WLAN-, NTP- und Telegram-Schritt gefüttert. Ein
+eigener HTTPS-Client hätte auch das Lesen begrenzt, kostete auf dem Board
+aber genug RAM, dass keine Seite mehr renderte; `urequests` liegt dagegen
+in der Firmware (Flash). Dabei die eigentliche Speicher-Ursache gefunden:
+Beim Laden der Module blieb der Heap so zersplittert, dass bei ~38 KB
+frei kein 2-KB-Block mehr übrig war. Abhilfe: `main.py` ist jetzt ein
+Starter, der während der Imports `gc.threshold()` setzt, das Programm
+selbst liegt in `aquarium.py` (vorkompiliert), und jede Seite reicht das
+CSS als eigenes Stück durch, statt es per `.format()` zu kopieren.
 
 ## Wie KI in diesem Projekt eingesetzt wird
 
@@ -150,13 +181,18 @@ echte Hardware zu benötigen.
 
 | Testdatei | Anzahl Tests | Prüft |
 |---|---|---|
-| [test_main.py](tests/test_main.py) | 23 | Hauptschleife: Watchdog-Fütterung, Fehlerisolierung pro Durchlauf, Sensor-Wiederverwendung, Lüftersteuerung (inkl. kein Schalten bei Sensorfehler), Verdrahtung der Sensor-Fehler-Meldung, Verdrahtung der Web-Oberfläche und der Logs, RAM-/Flash-Warnschwellen, Log-Speicher-Deckel |
-| [test_telegram.py](tests/test_telegram.py) | 13 | Telegram-Versand: Response-Schließung, UTF-8-Byte-Kodierung, Erfolgs-Rückmeldung von `notify()`, Benachrichtigungs-Timing, Fehler-/Benachrichtigungs-Protokoll |
+| [test_main.py](tests/test_main.py) | 32 | Hauptschleife: Watchdog-Fütterung (auch zwischen WLAN-, NTP- und Telegram-Schritt), Starter `main.py` (`gc.threshold()` beim Laden), Fehlerisolierung pro Durchlauf, Sensor-Wiederverwendung, Lüftersteuerung (inkl. kein Schalten bei Sensorfehler), Verdrahtung der Sensor-Fehler-Meldung und des Einrichtungs-WLANs, Absicherung der Fehler-Protokollierung, DNS-Polling im Sleep, Verdrahtung der Web-Oberfläche und der Logs, RAM-/Flash-Warnschwellen, Log-Speicher-Deckel |
+| [test_telegram.py](tests/test_telegram.py) | 21 | Telegram-Versand: Zeitlimit beim Verbindungsaufbau (5 s statt 18 s), 5-Minuten-Pause nach Fehlschlag, HTTP ≠ 200 als Fehler, Response-Schließung, UTF-8-Byte-Kodierung, Erfolgs-Rückmeldung von `notify()`, Benachrichtigungs-Timing, Fehler-/Benachrichtigungs-Protokoll |
 | [test_temperature.py](tests/test_temperature.py) | 6 | Sensor-Mittelwertbildung, Absturzsicherheit bei Lesefehlern, Fehlerprotokollierung |
 | [test_wlanconnection.py](tests/test_wlanconnection.py) | 12 | WLAN-Verbindung, DHCP-Hostname, NTP-Zeitsync-Retry, Netzwerk-Scan (inkl. 30s-Cache), Signalstärke, Fehlerprotokollierung |
+| [test_deploy.py](tests/test_deploy.py) | 13 | Deploy-Skript: welche Dateien zu `.mpy` kompiliert werden (nicht `boot.py`/`main.py`/`config.py`), Löschen alter `.py` auf dem Board, Compiler-Wahl je Firmware, Vollständigkeit der Übertragungsliste, echter v5-Compiler-Lauf (falls installiert) |
 | [test_settings.py](tests/test_settings.py) | 3 | Persistenz des Aquarium-Namens über Neustarts |
+| [test_setupmode.py](tests/test_setupmode.py) | 15 | Wann das Einrichtungs-WLAN auf-/zugeht (inkl. DNS-Polling nur solange aktiv): ohne Zugangsdaten, nach doppeltem RESET (10-min-Zeitlimit, nicht solange jemand verbunden ist), Fallback nach 5 min offline inkl. Heim-WLAN-Retry höchstens 1×/min und nie bei verbundenem Client |
+| [test_doublereset.py](tests/test_doublereset.py) | 5 | Erkennung des doppelten RESET-Drucks, einmaliges Abholen der Anforderung, keine Marker-Reste bei unterbrochenem Boot |
+| [test_accesspoint.py](tests/test_accesspoint.py) | 8 | Einrichtungs-WLAN (WPA2, Passwort ≥ 8 Zeichen, Config nach active()), DNS-Server nur solange aktiv, LED-Blinken im Sekundentakt, Abschalten von WLAN + LED |
+| [test_dnsserver.py](tests/test_dnsserver.py) | 10 | Catch-all-DNS im Einrichtungs-WLAN: A-Antwort mit eigener IP für jeden Namen, leere AAAA-Antwort, kaputte/kurze/Antwort-Pakete ignoriert, echte UDP-Anfrage (zusätzlich mit `dig` gegengeprüft) |
 | [test_wifisettings.py](tests/test_wifisettings.py) | 11 | Persistenz + Validierung der WLAN-Zugangsdaten (SSID-/Passwort-Längen nach 802.11/WPA2-Spezifikation) |
-| [test_webserver.py](tests/test_webserver.py) | 66 | HTTP-Server: Routing, Rohdaten-Download `/error-log.json` (Auth auch mit Query-String, nosniff, Download-Header), Sensor-Fehler-Checkbox auf `/settings` (inkl. atomar), Zähler zusammengefasster Fehler auf `/statistics`, HTTP-Basic-Auth, HTML-Escaping (XSS), Request-Size-Limit, Statistik-Seite (inkl. Zeilenbegrenzung gegen MemoryError), Warnschwellen-Formular, Protokollierungs-Checkboxen, Logs-löschen-Formular, `/datetime-settings` (Datum-/Zeit-Format- + Zeitzonen- + EU-Sommerzeit-Auswahl, inkl. Tagesgrenzen-Übertrag, getrennt von `/settings`), `gc.collect()` + Retry-nach-`MemoryError` vor jeder Anfrage, echte Socket-Kommunikation über Loopback |
+| [test_webserver.py](tests/test_webserver.py) | 76 | HTTP-Server: Routing, CSS als eigenes Stück statt Kopie in jeder Seite, stückweises Senden großer Seiten (`/datetime-settings` als Teilstücke), Weiterleitung `captain-nemo-setup` im Einrichtungs-WLAN, Rohdaten-Download `/error-log.json` (Auth auch mit Query-String, nosniff, Download-Header), Sensor-Fehler-Checkbox auf `/settings` (inkl. atomar), Zähler zusammengefasster Fehler auf `/statistics`, HTTP-Basic-Auth, HTML-Escaping (XSS), Request-Size-Limit, Statistik-Seite (inkl. Zeilenbegrenzung gegen MemoryError), Warnschwellen-Formular, Protokollierungs-Checkboxen, Logs-löschen-Formular, `/datetime-settings` (Datum-/Zeit-Format- + Zeitzonen- + EU-Sommerzeit-Auswahl, inkl. Tagesgrenzen-Übertrag, getrennt von `/settings`), `gc.collect()` + Retry-nach-`MemoryError` vor jeder Anfrage, echte Socket-Kommunikation über Loopback |
 | [test_eventlog.py](tests/test_eventlog.py) | 23 | Persistierter Event-Log: 30-Tage-Fenster, Begrenzung auf 200 Einträge, stückweises Senden der Rohdatei, Zusammenfassen gleicher Einträge mit Zähler (Fenstergrenze, Persistenz, nicht beim Benachrichtigungs-Log), Dateigröße, Alters-basiertes Löschen, Speicher-Budget-Durchsetzung |
 | [test_errorlog.py](tests/test_errorlog.py) | 7 | Exception → Fehlerkategorie/-code/-meldung, Ein-/Ausschalten je Kategorie, Zusammenfassen innerhalb von 12 h |
 | [test_sensoralert.py](tests/test_sensoralert.py) | 17 | Sensor-Fehler-Meldung: Bestätigung nach 3 Fehl-Messungen, 12-h-Erinnerung, Nachholen wenn offline, Retry-Pause nach Sendefehler, Entwarnung erst nach stabilen Werten (kein Flattern), Sensoren unabhängig, Persistenz + Fallbacks der Einstellung |
@@ -167,7 +203,7 @@ echte Hardware zu benötigen.
 | [test_datetimeformat.py](tests/test_datetimeformat.py) | 34 | Datums-/Zeit-Formatierung je Country/Culture (Tag/Monat-Reihenfolge, 12h-/24h-Anzeige inkl. Mitternacht/Mittag), Fallback auf ISO 8601 bei unbekannter Culture, UTC-Offset-Verschiebung inkl. Tages-/Monats-/Jahres-/Schaltjahr-Übertrag, Halb-/Viertelstunden-Offsets, EU-Sommerzeit-Umstellung (Übergangs-Instant auf die Sekunde, inkl. Schaltjahr) |
 | [test_datetimesettings.py](tests/test_datetimesettings.py) | 8 | Persistenz + Validierung der gewählten Culture, des UTC-Offsets und der EU-Sommerzeit-Checkbox, Fallback bei veralteter/ungültiger/fehlender gespeicherter Culture bzw. Offset bzw. Sommerzeit-Flag |
 
-**Gesamt: 239 Tests**, Stand des letzten vollständigen Durchlaufs in diesem
+**Gesamt: 317 Tests**, Stand des letzten vollständigen Durchlaufs in diesem
 Dokument. Viele Tests sind als Regressionstests für konkret auf der
 Hardware beobachtete Bugs angelegt (siehe Docstrings in den jeweiligen
 Testdateien) — sie beschreiben bewusst, *welches reale Problem* sie

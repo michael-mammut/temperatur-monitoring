@@ -246,6 +246,51 @@ class StatusPageAuthTests(unittest.TestCase):
         self.assertIn("200 OK", response)
 
 
+class SetupNetworkRedirectTests(unittest.TestCase):
+    def _response(self, raw_request, setup_active=True):
+        server = _new_server()
+        server._test_monitor = _fake_monitor()
+        server._test_monitor.network_setup = SimpleNamespace(is_active=lambda: setup_active)
+        try:
+            return _request(server, raw_request)
+        finally:
+            server._socket.close()
+
+    def test_setup_hostname_root_redirects_to_wifi_settings(self):
+        response = self._response(b"GET / HTTP/1.1\r\nHost: captain-nemo-setup\r\n\r\n")
+
+        self.assertIn("302 Found", response)
+        self.assertIn("Location: /wifi-settings\r\n", response)
+
+    def test_setup_hostname_wifi_settings_is_served_normally(self):
+        response = self._response(b"GET /wifi-settings HTTP/1.1\r\nHost: captain-nemo-setup\r\n\r\n")
+
+        self.assertIn("401 Unauthorized", response)  # admin password still required
+
+    def test_foreign_host_redirects_to_setup_page(self):
+        """The setup network's DNS resolves every name to the device, so a
+        phone's connectivity check lands here - send it to the setup page."""
+        response = self._response(
+            b"GET /hotspot-detect.html HTTP/1.1\r\nHost: captive.apple.com\r\n\r\n")
+
+        self.assertIn("Location: http://captain-nemo-setup/wifi-settings\r\n", response)
+
+    def test_ip_address_keeps_working_without_redirect(self):
+        response = self._response(b"GET / HTTP/1.1\r\nHost: 192.168.4.1\r\n\r\n")
+
+        self.assertIn("200 OK", response)
+
+    def test_host_header_with_port_is_recognised(self):
+        response = self._response(b"GET / HTTP/1.1\r\nHost: Captain-Nemo-Setup:80\r\n\r\n")
+
+        self.assertIn("Location: /wifi-settings\r\n", response)
+
+    def test_no_redirect_when_setup_network_is_off(self):
+        response = self._response(b"GET / HTTP/1.1\r\nHost: aquarium.fritz.box\r\n\r\n", setup_active=False)
+
+        self.assertIn("200 OK", response)
+
+
 class SettingsAuthTests(unittest.TestCase):
     def test_get_settings_without_auth_is_rejected(self):
         settings = _FakeSettings("Vorzimmer")
@@ -697,6 +742,73 @@ class SensorAlertOnSettingsPageTests(unittest.TestCase):
             server._socket.close()
 
         self.assertNotIn("sensor_alert", html)
+
+
+class LargePageMemoryTests(unittest.TestCase):
+    """Regression tests from real hardware (MicroPython 1.16): building
+    /datetime-settings as one ~6 KB string, and concatenating/encoding a
+    whole page for sending, failed with MemoryError on the fragmented heap."""
+
+    def test_datetime_page_pieces_are_never_bigger_than_the_shared_style(self):
+        from WebServer.pages import datetimesettings
+        from WebServer.webstyle import STYLE
+        server = _new_server(datetime_settings=_FakeDateTimeSettings())
+        try:
+            parts = datetimesettings.render_parts(server)
+        finally:
+            server._socket.close()
+
+        self.assertGreater(len(parts), 10)
+        self.assertLessEqual(max(len(p) for p in parts), len(STYLE))
+
+    def test_datetime_page_arrives_complete_over_http(self):
+        server = _new_server(datetime_settings=_FakeDateTimeSettings())
+        server._test_monitor = _fake_monitor()
+        try:
+            expected = server.render_datetime_settings()
+            response = _request(server, (
+                "GET /datetime-settings HTTP/1.1\r\nHost: localhost\r\n"
+                "Authorization: " + _basic_auth_header(ADMIN_PASSWORD) + "\r\n\r\n").encode())
+        finally:
+            server._socket.close()
+
+        self.assertEqual(response.partition("\r\n\r\n")[2], expected)
+        self.assertTrue(expected.rstrip().endswith("</html>"))
+
+    def test_every_page_passes_the_stylesheet_through_instead_of_copying_it(self):
+        """Copying the ~2.6 KB CSS into each page string needed one block
+        of that size - pages failed with "allocating 2648 bytes" on the
+        device. The CSS must be handed on as the very same object."""
+        from WebServer.pages import settings, statistics, status, wifisettings
+        from WebServer.webstyle import STYLE
+        server = _new_server()
+        monitor = _fake_monitor()
+        try:
+            pages = {
+                'status': status.render(server, monitor),
+                'settings': settings.render(server),
+                'wifi': wifisettings.render(server, monitor),
+                'statistics': statistics.render(server, monitor, None),
+            }
+        finally:
+            server._socket.close()
+
+        for name, parts in pages.items():
+            self.assertTrue(any(part is STYLE for part in parts), name)
+
+    def test_page_is_sent_in_small_slices(self):
+        sent = []
+        client = MagicMock()
+        client.sendall.side_effect = sent.append
+        server = _new_server()
+        try:
+            server._send_html(client, "ä" * 2000)
+        finally:
+            server._socket.close()
+
+        self.assertTrue(sent[0].startswith(b"HTTP/1.1 200 OK"))
+        self.assertLessEqual(max(len(chunk) for chunk in sent[1:]), 512 * 2)  # 512 chars, "ä" = 2 bytes
+        self.assertEqual(b"".join(sent[1:]).decode("utf-8"), "ä" * 2000)
 
 
 class DateTimeSettingsPageTests(unittest.TestCase):
@@ -1374,7 +1486,8 @@ class MemoryManagementTests(unittest.TestCase):
         self.assertIn("200 OK", response)
         self.assertIn("<html>ok</html>", response)
         self.assertEqual(mock_render.call_count, 2)
-        self.assertEqual(mock_collect.call_count, 2)
+        # one before reading the request, then one per render attempt
+        self.assertEqual(mock_collect.call_count, 3)
 
     def test_memory_error_on_both_attempts_does_not_crash_the_server(self):
         """If even the retry fails, the connection must still be closed

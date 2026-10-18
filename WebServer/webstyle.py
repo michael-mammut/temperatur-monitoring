@@ -85,3 +85,14 @@ tr:nth-child(even) td { background: var(--stripe); }
 svg rect { fill: var(--accent); }
 svg text { fill: var(--fg); }
 </style>"""
+
+
+def html_parts(template, **values):
+    """A page as [before the CSS, the CSS, after the CSS]. The ~2.6 KB
+    stylesheet is sent as it is instead of being copied into every page
+    string by .format() - that copy needed one ~2.6 KB block, which the
+    ESP32's fragmented heap regularly didn't have (MicroPython 1.16,
+    reproduced on the device: pages failed with "allocating 2648 bytes").
+    WebServer._send_html() sends the pieces one after another."""
+    before, _, after = template.partition('{style}')
+    return [before.format(**values), STYLE, after.format(**values)]

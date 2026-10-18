@@ -1,5 +1,5 @@
 from WebServer.datetimeformat import format_datetime
-from WebServer.webstyle import STYLE
+from WebServer.webstyle import html_parts
 from Temperature.temperature import SENSOR_ERROR
 
 
@@ -7,7 +7,7 @@ def render(server, monitor):
     water = _format_temperature(monitor.last_water_temperature)
     ambient = _format_temperature(monitor.last_ambient_temperature)
     name = server._escape_html(monitor.telegram._project_name)
-    return """<!DOCTYPE html>
+    return html_parts("""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -26,8 +26,7 @@ def render(server, monitor):
 </div>
 </body>
 </html>
-""".format(
-        style=STYLE,
+""",
         name=name,
         water=water,
         ambient=ambient,

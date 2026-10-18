@@ -21,6 +21,12 @@ class WlanConnection:
         wlan = WLAN(STA_IF)
         return wlan.isconnected()
 
+    def disconnect(self):
+        try:
+            WLAN(STA_IF).disconnect()
+        except Exception:
+            pass  # not connected/connecting - nothing to stop
+
     def get_rssi(self):
         try:
             return WLAN(STA_IF).status('rssi')
@@ -84,9 +90,11 @@ class WlanConnection:
             if time_to_wait_counter == time_to_wait:
                 break
 
-        if self.isConnected() == True:
-            self.ensure_time_synced()
-        else:
+        # No NTP sync here: the caller does it right after, in its own
+        # watchdog window - waiting for the connection (~5 s) plus NTP with
+        # an unanswered DNS lookup (~7 s, measured) came too close to the
+        # 15 s watchdog in a single step.
+        if self.isConnected() == False:
             led_twinkle(23, 200)
             led_twinkle(23, 200)
             led_twinkle(23, 200)

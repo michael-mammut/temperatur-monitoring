@@ -66,8 +66,28 @@ class FakeWLAN:
     def scan(self):
         return []
 
+    def disconnect(self):
+        pass
+
     def status(self, *args):
+        if args and args[0] == 'stations':
+            return []
         return -60  # a plausible default RSSI in dBm
+
+
+class FakeTimer:
+    PERIODIC = "PERIODIC"
+    ONE_SHOT = "ONE_SHOT"
+
+    def __init__(self, id=0):
+        self.id = id
+        self.callback = None
+
+    def init(self, period=None, mode=None, callback=None):
+        self.callback = callback
+
+    def deinit(self):
+        self.callback = None
 
 
 def _install_module(name, **attrs):
@@ -83,9 +103,9 @@ def _install_module(name, **attrs):
 
 def install():
     """Idempotent: safe to call from every test module."""
-    _install_module("machine", Pin=FakePin, WDT=FakeWDT, idle=lambda: None, reset=lambda: None)
+    _install_module("machine", Pin=FakePin, WDT=FakeWDT, Timer=FakeTimer, idle=lambda: None, reset=lambda: None)
     _install_module("ubinascii", a2b_base64=base64.b64decode, b2a_base64=base64.b64encode)
-    _install_module("network", WLAN=FakeWLAN, STA_IF="STA_IF")
+    _install_module("network", WLAN=FakeWLAN, STA_IF="STA_IF", AP_IF="AP_IF", AUTH_WPA2_PSK=3)
     _install_module("onewire", OneWire=object)
     _install_module("ds18x20", DS18X20=object)
     _install_module("ntptime", settime=lambda: None)

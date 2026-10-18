@@ -1,4 +1,4 @@
-from WebServer.webstyle import STYLE
+from WebServer.webstyle import html_parts
 
 
 def handle_post(server, monitor, body):
@@ -20,13 +20,15 @@ def render(server, monitor, saved=False, error=None, ssid=None):
     current_ssid = server._escape_html(server._wifi_settings.get_ssid())
     options = _render_network_options(server, monitor, selected=ssid)
     if saved:
-        message = ('<p class="msg">Gespeichert. Das Gerät verbindet sich jetzt neu - '
-                    'sollte das fehlschlagen, muss es per USB neu konfiguriert werden.</p>')
+        from WlanNetwork.accesspoint import AP_SSID
+        message = ('<p class="msg">Gespeichert. Das Gerät startet neu und verbindet sich mit dem neuen WLAN - '
+                    'klappt das nicht, öffnet es nach 5 Minuten wieder das Einrichtungs-WLAN '
+                    '"{}".</p>'.format(server._escape_html(AP_SSID)))
     elif error:
         message = '<p class="msg err">Fehler: {}</p>'.format(server._escape_html(error))
     else:
         message = ''
-    return """<!DOCTYPE html>
+    return html_parts("""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -51,7 +53,7 @@ def render(server, monitor, saved=False, error=None, ssid=None):
 </div>
 </body>
 </html>
-""".format(style=STYLE, current_ssid=current_ssid, options=options, message=message)
+""", current_ssid=current_ssid, options=options, message=message)
 
 
 def _render_network_options(server, monitor, selected=None):

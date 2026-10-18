@@ -10,20 +10,21 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import micropython_mocks
 micropython_mocks.install()
 
-import main
+import aquarium as main
 
 
 def _patch_hardware():
     """Replaces every hardware/network dependency of main.py with mocks so
     AquariumMonitor / main() can run under plain CPython."""
     return [
-        patch("main.ActorControl", return_value=MagicMock()),
-        patch("main.WlanConnection", return_value=MagicMock(isConnected=MagicMock(return_value=True))),
-        patch("main.Telegram", return_value=MagicMock(send_aquarium_notification=MagicMock(return_value=0))),
-        patch("main.Temperature", side_effect=lambda gpio, **kw: MagicMock(readCurrentAverage=MagicMock(return_value=21.5))),
-        patch("main.led_twinkle"),
-        patch("main.led_error_twinkle"),
-        patch("main.WebServer", return_value=MagicMock(handle_requests=MagicMock())),
+        patch("aquarium.ActorControl", return_value=MagicMock()),
+        patch("aquarium.SetupAccessPoint", return_value=MagicMock(has_clients=MagicMock(return_value=False))),
+        patch("aquarium.WlanConnection", return_value=MagicMock(isConnected=MagicMock(return_value=True))),
+        patch("aquarium.Telegram", return_value=MagicMock(send_aquarium_notification=MagicMock(return_value=0))),
+        patch("aquarium.Temperature", side_effect=lambda gpio, **kw: MagicMock(readCurrentAverage=MagicMock(return_value=21.5))),
+        patch("aquarium.led_twinkle"),
+        patch("aquarium.led_error_twinkle"),
+        patch("aquarium.WebServer", return_value=MagicMock(handle_requests=MagicMock())),
     ]
 
 
@@ -169,11 +170,99 @@ class SensorAlertWiringTests(_IsolatedCwdTestCase):
         class StopLoop(Exception):
             pass
 
-        with patch("main.WDT"), patch("main.time.sleep_ms", side_effect=StopLoop):
+        with patch("aquarium.WDT"), patch("aquarium._sleep_serving_network_setup", side_effect=StopLoop):
             with self.assertRaises(StopLoop):
                 main.main()
 
         self.assertIn("sensor_alert_settings", main.WebServer.call_args.kwargs)
+
+
+class NetworkSetupWiringTests(_IsolatedCwdTestCase):
+    def _monitor(self, connected):
+        patches = _patch_hardware()
+        for p in patches:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in patches])
+
+        monitor = main.AquariumMonitor()
+        monitor.network_setup = MagicMock()
+        monitor.wlan.isConnected.return_value = connected
+        monitor.wlan.connect.return_value = False
+        return monitor
+
+    def test_setup_network_active_skips_the_normal_connect(self):
+        monitor = self._monitor(connected=False)
+        monitor.network_setup.is_active.return_value = True
+
+        monitor.run_iteration()
+
+        monitor.network_setup.update.assert_called_once()
+        monitor.wlan.connect.assert_not_called()
+
+    def test_failed_connect_is_reported_for_the_fallback_timer(self):
+        monitor = self._monitor(connected=False)
+        monitor.network_setup.is_active.return_value = False
+
+        monitor.run_iteration()
+
+        monitor.network_setup.mark_offline.assert_called_once()
+
+    def test_connected_resets_the_fallback_timer(self):
+        monitor = self._monitor(connected=True)
+        monitor.network_setup.is_active.return_value = False
+
+        monitor.run_iteration()
+
+        monitor.network_setup.mark_online.assert_called_once()
+
+    def test_double_reset_request_is_passed_to_network_setup(self):
+        patches = _patch_hardware()
+        for p in patches:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in patches])
+        open('setup_request', 'w').close()
+
+        with patch("aquarium.NetworkSetup") as network_setup_cls:
+            main.AquariumMonitor()
+
+        self.assertTrue(network_setup_cls.call_args.kwargs["setup_requested"])
+        self.assertFalse(os.path.exists('setup_request'))
+
+
+class StarterTests(unittest.TestCase):
+    def test_starter_packs_the_modules_tightly_while_loading_them(self):
+        """Regression test from real hardware (MicroPython 1.16): without
+        gc.threshold() while loading, the heap was so fragmented that with
+        ~38 KB free not even a 2 KB block was left for a web request."""
+        with open(os.path.join(os.path.dirname(os.path.dirname(__file__)), "main.py")) as f:
+            source = f.read()
+
+        self.assertLess(source.index("gc.threshold(2048)"), source.index("from aquarium import main"))
+        self.assertLess(source.index("from aquarium import main"), source.index("gc.threshold(-1)"))
+        self.assertTrue(source.rstrip().endswith("main()"))
+
+
+class LoopExceptionLoggingTests(unittest.TestCase):
+    def test_failure_while_logging_does_not_escape(self):
+        """Regression test: on real hardware a MemoryError while writing
+        the log entry for a failed iteration escaped main() and stopped
+        the program until the watchdog reset the board."""
+        monitor = MagicMock()
+        with patch("aquarium.record_exception", side_effect=MemoryError("memory allocation failed")):
+            main._record_loop_exception(monitor, RuntimeError("original"))
+
+
+class LoopSleepTests(unittest.TestCase):
+    def test_sleep_polls_network_setup_in_short_slices(self):
+        """One main loop iteration takes several seconds - far too slow
+        to answer the setup network's DNS lookups. The loop's sleep must
+        keep answering them meanwhile."""
+        monitor = MagicMock()
+        with patch("aquarium.time.sleep_ms") as sleep_ms:
+            main._sleep_serving_network_setup(monitor, 3000)
+
+        self.assertEqual(monitor.network_setup.poll.call_count, 30)
+        self.assertEqual(sum(c.args[0] for c in sleep_ms.call_args_list), 3000)
 
 
 class MainLoopWatchdogTests(_IsolatedCwdTestCase):
@@ -196,14 +285,54 @@ class MainLoopWatchdogTests(_IsolatedCwdTestCase):
             wdt_instances.append(wdt)
             return wdt
 
-        with patch("main.WDT", side_effect=fake_wdt), \
-             patch("main.time.sleep_ms", side_effect=[None, None, StopLoop]), \
-             patch("main.gc.collect"):
+        with patch("aquarium.WDT", side_effect=fake_wdt), \
+             patch("aquarium._sleep_serving_network_setup", side_effect=[None, None, StopLoop]), \
+             patch("aquarium.gc.collect"):
             with self.assertRaises(StopLoop):
                 main.main()
 
         self.assertEqual(len(wdt_instances), 1)
-        self.assertEqual(wdt_instances[0].feed_count, 3)
+        # 3 iterations: once at the end of each, plus twice inside each
+        # (after the WLAN step and before Telegram, see the next test).
+        self.assertEqual(wdt_instances[0].feed_count, 9)
+
+    def test_time_sync_after_connecting_gets_its_own_watchdog_window(self):
+        """Measured on hardware: waiting for the WLAN (~5 s) plus NTP with
+        an unanswered DNS lookup (~7 s) in one step came within ~2 s of the
+        15 s watchdog."""
+        patches = _patch_hardware()
+        for p in patches:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in patches])
+        monitor = main.AquariumMonitor()
+        calls = []
+        monitor.wlan.isConnected.return_value = False
+        monitor.wlan.connect.side_effect = lambda: calls.append('connect') or True
+        monitor.wlan.ensure_time_synced.side_effect = lambda: calls.append('ntp')
+        monitor.feed_watchdog = lambda: calls.append('feed')
+
+        monitor.run_iteration()
+
+        self.assertEqual(calls[:3], ['connect', 'feed', 'ntp'])
+
+    def test_watchdog_is_fed_between_wlan_and_telegram_steps(self):
+        """Regression test from real hardware: connecting (~5 s), NTP and a
+        Telegram send in the same iteration shared one 15 s watchdog
+        window, which a slow network could exceed - each slow step now gets
+        its own window."""
+        patches = _patch_hardware()
+        for p in patches:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in patches])
+        monitor = main.AquariumMonitor()
+        calls = []
+        monitor.feed_watchdog = lambda: calls.append('feed')
+        monitor.telegram.send_aquarium_notification.side_effect = lambda *a: calls.append('telegram') or 0
+        monitor.wlan.ensure_time_synced.side_effect = lambda: calls.append('wlan')
+
+        monitor.run_iteration()
+
+        self.assertEqual(calls, ['wlan', 'feed', 'feed', 'telegram'])
 
     def test_web_server_is_served_every_iteration(self):
         patches = _patch_hardware()
@@ -214,9 +343,9 @@ class MainLoopWatchdogTests(_IsolatedCwdTestCase):
         class StopLoop(Exception):
             pass
 
-        with patch("main.WDT", side_effect=micropython_mocks.FakeWDT), \
-             patch("main.time.sleep_ms", side_effect=[None, None, StopLoop]), \
-             patch("main.gc.collect"):
+        with patch("aquarium.WDT", side_effect=micropython_mocks.FakeWDT), \
+             patch("aquarium._sleep_serving_network_setup", side_effect=[None, None, StopLoop]), \
+             patch("aquarium.gc.collect"):
             with self.assertRaises(StopLoop):
                 main.main()
 
@@ -235,9 +364,9 @@ class MainLoopWatchdogTests(_IsolatedCwdTestCase):
         class StopLoop(Exception):
             pass
 
-        with patch("main.WDT", side_effect=micropython_mocks.FakeWDT), \
-             patch("main.time.sleep_ms", side_effect=StopLoop), \
-             patch("main.gc.collect"):
+        with patch("aquarium.WDT", side_effect=micropython_mocks.FakeWDT), \
+             patch("aquarium._sleep_serving_network_setup", side_effect=StopLoop), \
+             patch("aquarium.gc.collect"):
             with self.assertRaises(StopLoop):
                 main.main()
 
@@ -297,10 +426,10 @@ class MainLoopWatchdogTests(_IsolatedCwdTestCase):
             wdt_instances.append(wdt)
             return wdt
 
-        with patch("main.AquariumMonitor.run_iteration", flaky_run_iteration), \
-             patch("main.WDT", side_effect=fake_wdt), \
-             patch("main.time.sleep_ms", side_effect=[None, StopLoop]), \
-             patch("main.gc.collect"):
+        with patch("aquarium.AquariumMonitor.run_iteration", flaky_run_iteration), \
+             patch("aquarium.WDT", side_effect=fake_wdt), \
+             patch("aquarium._sleep_serving_network_setup", side_effect=[None, StopLoop]), \
+             patch("aquarium.gc.collect"):
             with self.assertRaises(StopLoop):
                 main.main()
 
@@ -322,8 +451,8 @@ class ResourceUsageWarningTests(_IsolatedCwdTestCase):
             p.start()
         self.addCleanup(lambda: [p.stop() for p in patches])
 
-        with patch("main.get_memory_stats", return_value={'used': 60, 'free': 40, 'total': 100}), \
-             patch("main.get_storage_stats", return_value={'used': 20, 'free': 80, 'total': 100}):
+        with patch("aquarium.get_memory_stats", return_value={'used': 60, 'free': 40, 'total': 100}), \
+             patch("aquarium.get_storage_stats", return_value={'used': 20, 'free': 80, 'total': 100}):
             monitor = main.AquariumMonitor()
             monitor.monitoring_settings.set_thresholds(ram_percent=50, storage_percent=20, log_storage_percent=15)
             monitor.run_iteration()
@@ -338,8 +467,8 @@ class ResourceUsageWarningTests(_IsolatedCwdTestCase):
             p.start()
         self.addCleanup(lambda: [p.stop() for p in patches])
 
-        with patch("main.get_memory_stats", return_value={'used': 20, 'free': 80, 'total': 100}), \
-             patch("main.get_storage_stats", return_value={'used': 20, 'free': 80, 'total': 100}):
+        with patch("aquarium.get_memory_stats", return_value={'used': 20, 'free': 80, 'total': 100}), \
+             patch("aquarium.get_storage_stats", return_value={'used': 20, 'free': 80, 'total': 100}):
             monitor = main.AquariumMonitor()
             monitor.run_iteration()
 
@@ -351,8 +480,8 @@ class ResourceUsageWarningTests(_IsolatedCwdTestCase):
             p.start()
         self.addCleanup(lambda: [p.stop() for p in patches])
 
-        with patch("main.get_memory_stats", return_value={'used': 85, 'free': 15, 'total': 100}), \
-             patch("main.get_storage_stats", return_value={'used': 20, 'free': 80, 'total': 100}):
+        with patch("aquarium.get_memory_stats", return_value={'used': 85, 'free': 15, 'total': 100}), \
+             patch("aquarium.get_storage_stats", return_value={'used': 20, 'free': 80, 'total': 100}):
             monitor = main.AquariumMonitor()
             monitor.run_iteration()
             monitor.run_iteration()
@@ -367,8 +496,8 @@ class ResourceUsageWarningTests(_IsolatedCwdTestCase):
             p.start()
         self.addCleanup(lambda: [p.stop() for p in patches])
 
-        with patch("main.get_memory_stats", return_value={'used': 20, 'free': 80, 'total': 100}), \
-             patch("main.get_storage_stats", return_value={'used': 85, 'free': 15, 'total': 100}):
+        with patch("aquarium.get_memory_stats", return_value={'used': 20, 'free': 80, 'total': 100}), \
+             patch("aquarium.get_storage_stats", return_value={'used': 85, 'free': 15, 'total': 100}):
             monitor = main.AquariumMonitor()
             monitor.run_iteration()
             monitor.run_iteration()
@@ -385,8 +514,8 @@ class ResourceUsageWarningTests(_IsolatedCwdTestCase):
         low = {'used': 85, 'free': 15, 'total': 100}
         healthy = {'used': 20, 'free': 80, 'total': 100}
 
-        with patch("main.get_memory_stats", side_effect=[low, healthy, low]), \
-             patch("main.get_storage_stats", return_value=healthy):
+        with patch("aquarium.get_memory_stats", side_effect=[low, healthy, low]), \
+             patch("aquarium.get_storage_stats", return_value=healthy):
             monitor = main.AquariumMonitor()
             monitor.run_iteration()  # low -> notify (1)
             monitor.run_iteration()  # healthy -> flag reset
@@ -400,7 +529,7 @@ class ResourceUsageWarningTests(_IsolatedCwdTestCase):
             p.start()
         self.addCleanup(lambda: [p.stop() for p in patches])
 
-        with patch("main.get_memory_stats", return_value={'used': 95, 'free': 5, 'total': 100}) as get_memory:
+        with patch("aquarium.get_memory_stats", return_value={'used': 95, 'free': 5, 'total': 100}) as get_memory:
             monitor = main.AquariumMonitor()
             monitor.wlan.isConnected.return_value = False
             monitor.run_iteration()
@@ -421,8 +550,8 @@ class LogStorageBudgetTests(_IsolatedCwdTestCase):
             p.start()
         self.addCleanup(lambda: [p.stop() for p in patches])
 
-        with patch("main.enforce_storage_budget") as enforce_mock, \
-             patch("main.get_storage_stats", return_value={'used': 20, 'free': 80, 'total': 100}):
+        with patch("aquarium.enforce_storage_budget") as enforce_mock, \
+             patch("aquarium.get_storage_stats", return_value={'used': 20, 'free': 80, 'total': 100}):
             monitor = main.AquariumMonitor()
             monitor.wlan.isConnected.return_value = False
             monitor.run_iteration()
@@ -439,8 +568,8 @@ class LogStorageBudgetTests(_IsolatedCwdTestCase):
             p.start()
         self.addCleanup(lambda: [p.stop() for p in patches])
 
-        with patch("main.enforce_storage_budget") as enforce_mock, \
-             patch("main.get_storage_stats", return_value={'used': 20, 'free': 80, 'total': 100}):
+        with patch("aquarium.enforce_storage_budget") as enforce_mock, \
+             patch("aquarium.get_storage_stats", return_value={'used': 20, 'free': 80, 'total': 100}):
             monitor = main.AquariumMonitor()
             monitor.monitoring_settings.set_thresholds(ram_percent=20, storage_percent=20, log_storage_percent=7)
             monitor.run_iteration()
@@ -453,7 +582,7 @@ class LogStorageBudgetTests(_IsolatedCwdTestCase):
             p.start()
         self.addCleanup(lambda: [p.stop() for p in patches])
 
-        with patch("main.get_storage_stats", side_effect=OSError("no filesystem")):
+        with patch("aquarium.get_storage_stats", side_effect=OSError("no filesystem")):
             monitor = main.AquariumMonitor()
             monitor.run_iteration()  # must not raise
 

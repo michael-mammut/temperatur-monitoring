@@ -45,9 +45,12 @@ flowchart TD
     Init --> WDT["machine.WDT gestartet<br/>Timeout 15 s"]
     WDT --> Loop["run_iteration()"]
 
-    Loop --> WifiCheck{"WLAN verbunden?"}
-    WifiCheck -- nein --> Reconnect["Relais K1 an,<br/>wlan.connect() versuchen (max. 10× warten)"]
+    Loop --> SetupCheck{"Einrichtungs-WLAN aktiv?"}
+    SetupCheck -- ja --> SetupUpdate["network_setup.update():<br/>Zeitlimit / Heim-WLAN erneut versuchen"]
+    SetupCheck -- nein --> WifiCheck{"WLAN verbunden?"}
+    WifiCheck -- nein --> Reconnect["Relais K1 an,<br/>wlan.connect() versuchen (max. 10× warten);<br/>nach 5 min offline → Einrichtungs-WLAN"]
     WifiCheck -- ja --> Read
+    SetupUpdate --> Read
     Reconnect --> Read["Wasser- + Umgebungstemperatur lesen"]
 
     Read --> Pump{"Uhrzeit == AIR_PUMP_ON/OFF?"}
@@ -192,12 +195,17 @@ sequenceDiagram
 
 | Datei | Zweck |
 |---|---|
-| [boot.py](boot.py) | Wird bei jedem Boot ausgeführt (auch nach Deep-Sleep), aktuell leer |
-| [main.py](main.py) | Einstiegspunkt: `AquariumMonitor`-Klasse + Hauptschleife mit Watchdog |
+| [boot.py](boot.py) | Wird bei jedem Boot ausgeführt (auch nach Deep-Sleep) — erkennt einen doppelten RESET-Druck (siehe [WLAN-Einrichtung](#wlan-einrichtung-einrichtungs-wlan)) |
+| [main.py](main.py) | Starter: lädt `aquarium` mit `gc.threshold()` (verhindert einen zersplitterten Heap nach dem Start) und startet die Hauptschleife |
+| [aquarium.py](aquarium.py) | Das eigentliche Programm: `AquariumMonitor`-Klasse + Hauptschleife mit Watchdog — eigenes Modul, damit es vorkompiliert (`.mpy`) übertragen werden kann |
 | [config.py](config.py) | Projektname für Telegram-Nachrichten |
 | [Temperature/temperature.py](Temperature/temperature.py) | Liest DS18B20-Sensoren über OneWire aus, Mittelwertbildung |
 | [Notification/telegram.py](Notification/telegram.py) | Sendet Statusnachrichten per Telegram Bot API |
 | [WlanNetwork/wlanconnection.py](WlanNetwork/wlanconnection.py) | WLAN-Verbindungsaufbau inkl. NTP-Zeitsynchronisation |
+| [WlanNetwork/setupmode.py](WlanNetwork/setupmode.py) | Entscheidet, wann das Einrichtungs-WLAN auf- und wieder zugeht (keine Zugangsdaten / doppelter RESET / Heim-WLAN 5 min weg) |
+| [WlanNetwork/accesspoint.py](WlanNetwork/accesspoint.py) | Eigenes Einrichtungs-WLAN `Captain-Nemo-Setup` (WPA2, `12345678`) + Status-LED (GPIO 2) blinkt im Sekundentakt per Hardware-Timer |
+| [WlanNetwork/doublereset.py](WlanNetwork/doublereset.py) | Erkennt zwei RESET-Drücke innerhalb von 3 s über eine Marker-Datei auf dem Flash |
+| [WlanNetwork/dnsserver.py](WlanNetwork/dnsserver.py) | Mini-DNS-Server im Einrichtungs-WLAN: beantwortet jede Anfrage mit `192.168.4.1`, damit `http://captain-nemo-setup/` ohne Router funktioniert; wird auch während der Pause der Hauptschleife alle 100 ms abgefragt |
 | [GpioControl/ActorControl.py](GpioControl/ActorControl.py) | Ein-/Ausschalten eines Relais-Kanals |
 | [GpioControl/LedControl.py](GpioControl/LedControl.py) | Status-/Fehler-LEDs blinken lassen |
 | [WebServer/webserver.py](WebServer/webserver.py) | HTTP-Server-Kern: Routing, HTTP-Basic-Auth, Request-Parsing - delegiert das Rendern/die Formularverarbeitung jeder Seite an `WebServer/pages/*.py` |
@@ -238,7 +246,7 @@ cp WlanNetwork/config.example.py WlanNetwork/config.py
 
 | Parameter | Bedeutung |
 |---|---|
-| `SSID` | Name des WLAN-Netzwerks |
+| `SSID` | Name des WLAN-Netzwerks — leer lassen (`''`), um das Gerät ausschließlich über das [Einrichtungs-WLAN](#wlan-einrichtung-einrichtungs-wlan) zu konfigurieren |
 | `PASSWORD` | WLAN-Passwort im Klartext |
 | `DHCP_HOSTNAME` | Hostname, unter dem sich der ESP32 im Netzwerk meldet |
 
@@ -338,6 +346,33 @@ Keine Secrets, daher regulär in Git. Werte sind auch über `/settings` zur Lauf
 
 Details zur Absicherung (Zugriffsschutz, Eingabevalidierung, bekannte Grenzen) stehen in [SECURITY.md](SECURITY.md).
 
+## WLAN-Einrichtung (Einrichtungs-WLAN)
+
+Kommt der ESP32 nicht ins Heim-WLAN, öffnet er sein eigenes WLAN, über das man ihm ein neues zuweisen kann — ohne USB-Kabel und ohne `config.py` anzufassen.
+
+| | |
+|---|---|
+| WLAN-Name | `Captain-Nemo-Setup` |
+| WLAN-Passwort | `12345678` (WPA2 verlangt mindestens 8 Zeichen) |
+| Einrichtungsseite | `http://captain-nemo-setup/` (leitet auf `/wifi-settings` weiter) oder `http://192.168.4.1/wifi-settings` — Admin-Passwort aus `WebServer/config.py` |
+| Erkennbar an | eingebaute LED (GPIO 2) blinkt im Sekundentakt |
+
+**Wann es aufgeht:**
+
+| Auslöser | Verhalten |
+|---|---|
+| Keine Zugangsdaten gespeichert (`SSID = ''` und keine `wifi_settings.json`) | Sofort, bleibt offen, bis neue Zugangsdaten gespeichert werden |
+| **RESET zweimal kurz hintereinander drücken** (zweiter Druck 1–3 s nach dem ersten) | Sofort. Die bisherigen Zugangsdaten bleiben erhalten: Wird innerhalb von 10 Minuten nichts Neues gespeichert, verbindet sich das Gerät wieder mit dem alten WLAN (nie, solange gerade jemand mit dem Einrichtungs-WLAN verbunden ist) |
+| Heim-WLAN 5 Minuten lang nicht erreichbar (z. B. Router nach Stromausfall langsamer als der ESP32, Router getauscht) | Einrichtungs-WLAN geht auf; das Heim-WLAN wird jede Minute erneut versucht, solange niemand mit dem Einrichtungs-WLAN verbunden ist — klappt es, geht das Einrichtungs-WLAN wieder zu |
+
+**Warum zweimal RESET statt einmal:** Für den ESP32 sieht ein einzelner RESET-Druck genauso aus wie ein Stromausfall. Würde schon ein Druck das Einrichtungs-WLAN auslösen, passierte das auch nach jedem Stromausfall. Ein Druck bleibt deshalb ein normaler Neustart. Der BOOT-Knopf scheidet aus, weil an GPIO 0 der Wassersensor hängt.
+
+**Ablauf:** Handy/Laptop mit `Captain-Nemo-Setup` verbinden → `http://captain-nemo-setup/` öffnen (mit `http://` davor, sonst sucht der Browser den Begriff im Web; viele Handys öffnen die Seite nach dem Verbinden auch von selbst) → Netzwerk wählen, Passwort eingeben, „Verbinden“ → das Gerät startet neu und verbindet sich mit dem neuen WLAN. Klappt das nicht (z. B. Tippfehler im Passwort), geht nach 5 Minuten wieder das Einrichtungs-WLAN auf.
+
+**Warum der DNS-Server *jeden* Namen beantwortet:** Ohne Router gibt es im Einrichtungs-WLAN niemanden, der `captain-nemo-setup` auflöst. Würden andere Anfragen (z. B. der Verbindungstest des Handys) unbeantwortet bleiben, hielte das Handy das WLAN für „ohne Internet“ und schickte DNS über die Mobildaten — dann fände es auch `captain-nemo-setup` nicht mehr. Anfragen an fremde Namen leitet der Webserver auf die Einrichtungsseite weiter.
+
+Während das Einrichtungs-WLAN aktiv ist, laufen Temperaturmessung und Lüftersteuerung normal weiter; nur Telegram-Nachrichten gehen mangels Internet nicht raus.
+
 ## Setup — Schritt für Schritt
 
 1. **Hardware verkabeln** gemäß der GPIO-Tabelle oben (2× DS18B20 mit Pull-up-Widerstand ~4,7 kΩ am Datenpin, 4-Kanal-Relais-Modul, 2 LEDs mit Vorwiderstand an GPIO 22/23).
@@ -351,9 +386,11 @@ Details zur Absicherung (Zugriffsschutz, Eingabevalidierung, bekannte Grenzen) s
    cp WebServer/config.example.py WebServer/config.py
    # in allen drei Dateien die Platzhalter durch echte Werte ersetzen
    ```
+   Das WLAN muss nicht hier eingetragen werden: Mit `SSID = ''` öffnet das Gerät beim ersten Start das [Einrichtungs-WLAN](#wlan-einrichtung-einrichtungs-wlan).
 5. **Benötigtes Tool installieren** — [pyserial](https://github.com/pyserial/pyserial):
    ```bash
    pip install pyserial
+   pip install mpy-cross-v5   # Compiler für MicroPython 1.12–1.18 (bei 1.19+: pip install mpy-cross)
    ```
 6. **Dateien auf den ESP32 übertragen** mit [scripts/deploy_esp32.py](scripts/deploy_esp32.py):
    ```bash
@@ -366,6 +403,10 @@ Details zur Absicherung (Zugriffsschutz, Eingabevalidierung, bekannte Grenzen) s
    python3 scripts/deploy_esp32.py --port /dev/ttyUSB0    # falls der Port nicht /dev/cu.usbserial-0001 ist
    ```
    Welche Dateien übertragen werden, steht in der `FILES`-Liste im Skript — `tests/`, `.github/`, `README.md`, `.gitignore` und `*.example.py` gehören bewusst **nicht** dazu, die bleiben auf dem Dev-Rechner.
+
+   **Module werden vorkompiliert (`.mpy`) übertragen.** Sonst übersetzt MicroPython jede `.py`-Datei beim Import auf dem Board selbst — das kostete gemessen ~67 KB RAM und hinterließ den Heap so zersplittert, dass auf MicroPython 1.16 keine einzige Seite der Web-Oberfläche mehr gerendert werden konnte. Das Skript fragt die Firmware nach ihrem `.mpy`-Format und wählt den passenden Compiler selbst; `boot.py`, `main.py` und alle `config.py` bleiben `.py` (Autostart bzw. von Hand editierbar). Eine alte `.py` desselben Moduls wird auf dem Board gelöscht, weil MicroPython sonst sie statt der `.mpy` lädt. Mit `--no-mpy` wird wie früher reiner Quelltext übertragen (z. B. zur Fehlersuche).
+
+   > **Firmware-Wahl auf einem ESP32 ohne PSRAM:** Getestet wurden 1.16 und 1.29. Auf **1.29** teilen sich Python-Heap und WLAN/TLS-Speicher denselben Bereich; sobald das Projekt geladen ist, bleiben nach dem WLAN-Aufbau nur ~26 KB für TLS übrig — der HTTPS-Aufruf an Telegram hängt dann ~60 s und der Watchdog startet das Board neu. Auf **1.16** sind beide Bereiche getrennt; mit `.mpy` laufen dort alle Seiten, Telegram und das Einrichtungs-WLAN. Für mehr Luft ist ein ESP32 mit PSRAM (z. B. WROVER) die zukunftssichere Lösung.
 
    Das Skript öffnet die Raw-REPL-Verbindung selbst und überträgt jede Datei in kleinen 512-Byte-Häppchen statt als ein großes Stück. Beides war nötig, nachdem sich in diesem Projekt zwei konkrete Probleme mit [`mpremote`](https://docs.micropython.org/en/latest/reference/mpremote.html) gezeigt hatten: Es scheiterte zuverlässig mit `could not enter raw repl`, wenn das Board gerade in einer Endlosschleife steckte (z. B. WLAN-Reconnect), und größere Dateien (ab ein paar KB) ließen sich gar nicht übertragen, weil die Übertragung als ein einziger Block eine einzige große, zusammenhängende Speicher-Allokation braucht, die auf dem ESP32 selbst direkt nach einem Neustart mit `MemoryError` fehlschlägt. Das Skript war die Lösung für beide Probleme — siehe Docstring in [scripts/deploy_esp32.py](scripts/deploy_esp32.py) für Details.
 

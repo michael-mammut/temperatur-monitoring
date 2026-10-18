@@ -69,7 +69,10 @@ Zeitpunkt, nicht der gerade stattfindende (sonst stünde dort trivial immer
 | XSS über Aquarium-Namen, WLAN-SSID (auch von fremden, bösartig benannten Netzwerken in der Scan-Liste!) | HTML-Escaping aller Ausgaben (`_escape_html`) |
 | Speicher-Erschöpfung durch riesige/lügende `Content-Length` | Jede Anfrage wird hart auf 2048 Bytes begrenzt (`_MAX_REQUEST_BYTES`), unabhängig vom angegebenen Header |
 | Ungültige/zu lange SSID oder Passwort | Validierung nach 802.11-/WPA2-Spezifikation (SSID ≤ 32 Byte, Passwort 8–63 Zeichen oder leer für offene Netze) vor jedem Speichern |
-| Falsches WLAN-Passwort führt zum Aussperren | Speichern + Neustart passiert nur nach erfolgreicher Validierung; bei einem Fehler bleibt das Gerät mit den alten, funktionierenden Zugangsdaten online |
+| Falsches WLAN-Passwort führt zum Aussperren | Speichern + Neustart passiert nur nach erfolgreicher Validierung; bei einem Fehler bleibt das Gerät mit den alten, funktionierenden Zugangsdaten online. Ist ein formal gültiges, aber falsches Passwort gespeichert, öffnet das Gerät nach 5 min ohne Verbindung das Einrichtungs-WLAN — kein USB-Kabel nötig |
+| Fremde verbinden sich mit dem Einrichtungs-WLAN (`Captain-Nemo-Setup`, Default-Passwort `12345678` steht öffentlich im README) | Das WLAN-Passwort allein reicht nicht: `/wifi-settings` verlangt weiterhin das Admin-Passwort. Das Einrichtungs-WLAN ist nur offen, wenn keine Zugangsdaten gespeichert sind, nach einem bewussten doppelten RESET-Druck (max. 10 min, danach zurück ins alte WLAN) oder wenn das Heim-WLAN 5 min weg ist. WPA2 statt offenem Netz, damit das Admin-Passwort (Basic Auth, ohne TLS) nicht im Klartext durch die Luft geht |
+| Catch-all-DNS im Einrichtungs-WLAN ([WlanNetwork/dnsserver.py](WlanNetwork/dnsserver.py)) | Läuft nur, solange das Einrichtungs-WLAN aktiv ist, und beantwortet ausschließlich mit der eigenen IP — es wird nichts weitergeleitet oder aufgelöst. Kaputte, zu kurze oder als Antwort markierte Pakete werden verworfen (eigene Paketprüfung, Grenzen gegen die Paketlänge geprüft), Anfragen sind auf 512 Bytes begrenzt. Die Weiterleitung fremder Hosts im Webserver zeigt immer auf die feste Einrichtungsseite, nie auf einen Wert aus der Anfrage (kein Open Redirect) |
+| Einrichtungs-WLAN durch einen einzelnen RESET/Stromausfall | Nur ein **doppelter** RESET-Druck innerhalb von 3 s löst es aus — ein Stromausfall ist für den ESP32 nicht von einem einzelnen RESET-Druck zu unterscheiden. Die Marker-Datei wird auch bei einem unterbrochenen Boot (Ctrl-C vom Deploy-Skript) entfernt, damit der nächste Boot nicht fälschlich als zweiter Druck zählt |
 | Passwort-Leck über die Oberfläche selbst | Passwortfeld ist write-only — der gespeicherte Wert wird nie wieder angezeigt, auch nicht im HTML-Quelltext |
 | XSS über Fehlermeldungen auf `/statistics` | Fehlermeldungen stammen aus internem Exception-Text, nicht direkt aus Nutzereingaben — werden aber trotzdem HTML-escaped ausgegeben, falls eine Meldung einmal externe Daten enthält (z. B. eine Server-Antwort) |
 | Unbegrenztes Wachstum von Fehler-/Benachrichtigungs-Log | [WebServer/eventlog.py](WebServer/eventlog.py) begrenzt jedes Log hart auf 200 Einträge, unabhängig vom Alter — ein Crash-Loop kann die Datei (und die JSON-Parse-Kosten beim Laden) nicht unbegrenzt wachsen lassen |
@@ -98,6 +101,11 @@ Zeitpunkt, nicht der gerade stattfindende (sonst stünde dort trivial immer
   Telegram, Watchdog-Feed) steht. Ergebnis wird 30 s gecacht
   (`WlanConnection.scan_networks`), um das zu entschärfen — ganz vermeiden
   lässt es sich mit diesem Single-Thread-Design nicht.
+- **Das Default-Passwort des Einrichtungs-WLANs ist öffentlich.** Wer in
+  Funkreichweite ist, während das Einrichtungs-WLAN offen ist, kann sich
+  verbinden und die Status-Seite `/` sehen. Ändern lässt sich das WLAN
+  nur mit dem Admin-Passwort — das Admin-Passwort ist damit in dieser
+  Situation der einzige Schutz und sollte kein triviales sein.
 - **Wer das Admin-Passwort hat, kann die Protokollierung abschalten oder
   Logs löschen.** Die Kategorie-Checkboxen auf `/settings` und der
   "Logs löschen"-Button auf `/statistics` sind bewusst mächtig — jemand

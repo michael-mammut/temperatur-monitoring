@@ -1,6 +1,6 @@
 ---
 name: nemo-workflow
-description: Standard-Workflow für Code-Änderungen an diesem Projekt (Captain Nemo, ESP32/MicroPython-Aquarium-Monitor) - Tests, Hardware-Deploy, Verifikation, Doku, Git-Regeln. Immer anwenden, wenn main.py, WebServer/, WlanNetwork/, Notification/, Temperature/, Monitoring/, GpioControl/ oder Airpump/ geändert werden.
+description: Standard-Workflow für Code-Änderungen an diesem Projekt (Captain Nemo, ESP32/MicroPython-Aquarium-Monitor) - Tests, Hardware-Deploy, Verifikation, Doku, Git-Regeln. Immer anwenden, wenn main.py, aquarium.py, WebServer/, WlanNetwork/, Notification/, Temperature/, Monitoring/, GpioControl/ oder Airpump/ geändert werden.
 ---
 
 # Captain Nemo – Entwicklungs-Workflow
@@ -232,6 +232,32 @@ und musste nachträglich gefixt werden.
 zuverlässig bei Endlosschleifen auf dem Board, und größere Dateien als ein
 Block führen zu `MemoryError` auf dem ESP32). `mpremote` ist nur für die
 REPL-Konsole weiterhin brauchbar.
+
+Das Skript kompiliert Module vorab zu `.mpy` (passender Compiler wird über
+die Firmware-Version gewählt: `pip install mpy-cross-v5` für 1.16,
+`mpy-cross` für 1.19+). Ohne das reicht der RAM auf dem ESP32 ohne PSRAM
+nicht: auf 1.16 rendert dann keine Seite mehr. Neue Module in `FILES`
+eintragen - `tests/test_deploy.py` prüft, dass kein Projektmodul fehlt.
+Große Seiten nicht als einen String bauen, sondern als Liste von
+Teilstücken zurückgeben (Muster: `render_parts()` in
+`WebServer/pages/datetimesettings.py`, für das CSS `html_parts()` in
+`WebServer/webstyle.py`), `_send_html()` sendet sie einzeln.
+
+**Speicher auf dem ESP32 ohne PSRAM (MicroPython 1.16) ist auf Kante
+genäht** - schon 1-2 KB mehr Bytecode im RAM ließen Seiten wieder mit
+`MemoryError` scheitern. Deshalb: das Programm steht in `aquarium.py`
+(wird zu `.mpy`), `main.py` ist nur der Starter mit `gc.threshold()`
+während der Imports (ohne das war der Heap nach dem Start so zersplittert,
+dass bei ~38 KB frei kein 2-KB-Block übrig war). Firmware-eigene Module
+(`urequests`, liegen im Flash) eigenem Code im RAM vorziehen. Jede
+Änderung, die Code hinzufügt, auf dem Gerät mit Telegram-Versand *und*
+mehreren Seitenabrufen hintereinander prüfen.
+
+**Doppel-Reset beim Testen:** Das Öffnen des seriellen Ports resettet das
+Board. Passiert das innerhalb von 3 s nach einem Deploy (dessen
+Soft-Reset) oder einem anderen Reset, zählt es als doppelter RESET-Druck
+und das Board startet im Einrichtungs-WLAN statt im Heim-WLAN. Zwischen
+Deploy und dem nächsten Öffnen des Ports ein paar Sekunden warten.
 
 ## Git
 

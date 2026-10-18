@@ -1,5 +1,5 @@
 from WebServer.errorlog import ALL_CATEGORIES, CATEGORY_LABELS
-from WebServer.webstyle import STYLE
+from WebServer.webstyle import html_parts
 
 
 def handle_post(server, monitor, body):
@@ -79,7 +79,7 @@ def render(server, saved=False, error=None):
             '<label class="check"><input type="checkbox" name="sensor_alert" value="1"{}> '
             'Sensor-Fehler per Telegram melden (sofort, dann alle 12 h)</label>'.format(checked))
 
-    return """<!DOCTYPE html>
+    return html_parts("""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -101,5 +101,5 @@ def render(server, saved=False, error=None):
 </div>
 </body>
 </html>
-""".format(style=STYLE, message=message, name=name, monitoring_fields=monitoring_fields,
+""", message=message, name=name, monitoring_fields=monitoring_fields,
            logging_fields=logging_fields, alert_fields=alert_fields)

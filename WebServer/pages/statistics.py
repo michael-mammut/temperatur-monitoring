@@ -3,7 +3,7 @@ import time
 from WebServer.datetimeformat import format_datetime
 from WebServer.errorlog import ALL_CATEGORIES, CATEGORY_LABELS, CATEGORY_SYSTEM
 from WebServer.systemstats import format_bytes, get_memory_stats, get_storage_stats
-from WebServer.webstyle import STYLE
+from WebServer.webstyle import html_parts
 
 _THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60
 
@@ -49,7 +49,7 @@ def render(server, monitor, previous_login, message=None):
     log_storage = _format_log_storage(server, storage)
     message_html = '<p class="msg">{}</p>'.format(server._escape_html(message)) if message else ''
 
-    return """<!DOCTYPE html>
+    return html_parts("""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -94,8 +94,7 @@ def render(server, monitor, previous_login, message=None):
 </div>
 </body>
 </html>
-""".format(
-        style=STYLE,
+""",
         mem_used=format_bytes(memory['used']),
         mem_free=format_bytes(memory['free']),
         mem_total=format_bytes(memory['total']),
